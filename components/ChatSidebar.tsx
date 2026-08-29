@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   MessageSquare,
   ChevronLeft,
@@ -9,59 +9,33 @@ import {
   Plus,
   Trash2,
   MoreHorizontal,
+  Loader2,
+  FileText,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
-interface WorkspaceItem {
+interface SessionItem {
   id: string;
-  title: string;
-  timestamp: string;
-  preview: string;
+  formName: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  totalFields: number;
+  filledFields: number;
 }
 
-const historyData: WorkspaceItem[] = [
-  {
-    id: "1",
-    title: "Customer Support Analysis",
-    timestamp: "Today, 8:30 PM",
-    preview: "List all open tickets for Q3...",
-  },
-  {
-    id: "2",
-    title: "SLA Violation Report",
-    timestamp: "Today, 6:15 PM",
-    preview: "Show all SLA violated tickets...",
-  },
-  {
-    id: "3",
-    title: "Team Performance Review",
-    timestamp: "Yesterday",
-    preview: "Summarize agent performance...",
-  },
-  {
-    id: "4",
-    title: "Ticket Escalation Check",
-    timestamp: "Yesterday",
-    preview: "Find escalated tickets this week...",
-  },
-  {
-    id: "5",
-    title: "Monthly Summary",
-    timestamp: "Aug 27",
-    preview: "Generate monthly report for...",
-  },
-  {
-    id: "6",
-    title: "Priority Tickets Review",
-    timestamp: "Aug 25",
-    preview: "List all high-priority tickets...",
-  },
-  {
-    id: "7",
-    title: "Unresolved Queries",
-    timestamp: "Aug 24",
-    preview: "Show unresolved queries older than...",
-  },
-];
+function formatTimestamp(iso: string): string {
+  const date = new Date(iso);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) {
+    return `Today, ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  }
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return `${diffDays} days ago`;
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
 
 interface ChatSidebarProps {
   activeId?: string;
@@ -71,6 +45,36 @@ interface ChatSidebarProps {
 export default function ChatSidebar({ activeId, onSelect }: ChatSidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(true);
+  const router = useRouter();
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setIsLoadingSessions(true);
+      try {
+        const res = await fetch("/api/sessions");
+        const data = await res.json();
+        if (!cancelled && data.sessions) setSessions(data.sessions);
+      } catch {
+        // silent
+      } finally {
+        if (!cancelled) setIsLoadingSessions(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleNewChat = () => {
+    router.push("/chat");
+  };
+
+  const handleSessionClick = (id: string) => {
+    onSelect?.(id);
+    router.push(`/workspace?session=${id}`);
+  };
 
   return (
     <aside
@@ -119,6 +123,7 @@ export default function ChatSidebar({ activeId, onSelect }: ChatSidebarProps) {
       {!collapsed && (
         <div className="px-3 pt-3 pb-1">
           <button
+            onClick={handleNewChat}
             className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl
               bg-gradient-to-r from-[#6c47d9] to-[#8b5cf6] text-white text-sm font-medium
               hover:opacity-90 transition-opacity shadow-sm"
@@ -135,93 +140,113 @@ export default function ChatSidebar({ activeId, onSelect }: ChatSidebarProps) {
           <div className="flex items-center gap-1.5 px-2 py-1.5 mb-1">
             <Clock size={13} className="text-[#9d8ec7]" />
             <span className="text-[11px] font-semibold text-[#9d8ec7] uppercase tracking-widest">
-              Recent History
+              Recent Sessions
             </span>
           </div>
 
-          {historyData.map((item) => (
-            <div
-              key={item.id}
-              className={`group relative flex items-start gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-150
-                ${
-                  activeId === item.id
+          {isLoadingSessions && (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 size={18} className="text-[#9d8ec7] animate-spin" />
+            </div>
+          )}
+
+          {!isLoadingSessions && sessions.length === 0 && (
+            <div className="flex flex-col items-center py-6 gap-2 text-center">
+              <FileText size={20} className="text-[#c4b8e8]" />
+              <p className="text-xs text-[#9d8ec7]">No sessions yet.<br />Upload a PDF to get started.</p>
+            </div>
+          )}
+
+          {sessions.map((item) => {
+            const pct = item.totalFields > 0
+              ? Math.round((item.filledFields / item.totalFields) * 100)
+              : 0;
+            return (
+              <div
+                key={item.id}
+                className={`group relative flex items-start gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-150
+                  ${activeId === item.id
                     ? "bg-[#f0ebff] border border-[#d4c6f5]"
                     : "hover:bg-[#f8f5ff] border border-transparent"
-                }`}
-              onMouseEnter={() => setHoveredId(item.id)}
-              onMouseLeave={() => setHoveredId(null)}
-              onClick={() => onSelect?.(item.id)}
-            >
-              <div
-                className={`mt-0.5 w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0
-                ${
-                  activeId === item.id
+                  }`}
+                onMouseEnter={() => setHoveredId(item.id)}
+                onMouseLeave={() => setHoveredId(null)}
+                onClick={() => handleSessionClick(item.id)}
+              >
+                <div
+                  className={`mt-0.5 w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0
+                  ${activeId === item.id
                     ? "bg-gradient-to-br from-[#6c47d9] to-[#8b5cf6]"
                     : "bg-[#ede9f7]"
-                }`}
-              >
-                <MessageSquare
-                  size={12}
-                  className={
-                    activeId === item.id ? "text-white" : "text-[#9d8ec7]"
-                  }
-                />
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <p
-                  className={`text-sm font-medium truncate ${
-                    activeId === item.id ? "text-[#6c47d9]" : "text-[#2d1b69]"
                   }`}
                 >
-                  {item.title}
-                </p>
-                <p className="text-[11px] text-[#9d8ec7] truncate mt-0.5">
-                  {item.preview}
-                </p>
-                <p className="text-[10px] text-[#c4b8e8] mt-0.5">
-                  {item.timestamp}
-                </p>
-              </div>
-
-              {/* Hover actions */}
-              {hoveredId === item.id && (
-                <div className="flex items-center gap-1 absolute right-2 top-2.5">
-                  <button
-                    className="p-1 rounded-lg hover:bg-[#e8e0f5] text-[#9d8ec7] hover:text-[#6c47d9] transition-colors"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <MoreHorizontal size={13} />
-                  </button>
-                  <button
-                    className="p-1 rounded-lg hover:bg-[#ffe4e8] text-[#9d8ec7] hover:text-[#e05c8a] transition-colors"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <Trash2 size={13} />
-                  </button>
+                  <FileText
+                    size={12}
+                    className={activeId === item.id ? "text-white" : "text-[#9d8ec7]"}
+                  />
                 </div>
-              )}
-            </div>
-          ))}
+
+                <div className="flex-1 min-w-0">
+                  <p
+                    className={`text-sm font-medium truncate ${
+                      activeId === item.id ? "text-[#6c47d9]" : "text-[#2d1b69]"
+                    }`}
+                  >
+                    {item.formName}
+                  </p>
+                  <div className="flex items-center gap-1.5 mt-1">
+                    {/* Mini progress bar */}
+                    <div className="flex-1 h-1 rounded-full bg-[#ede9f7] overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-[#6c47d9] to-[#8b5cf6] transition-all"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] text-[#9d8ec7] flex-shrink-0">{pct}%</span>
+                  </div>
+                  <p className="text-[10px] text-[#c4b8e8] mt-0.5">
+                    {formatTimestamp(item.updatedAt)}
+                  </p>
+                </div>
+
+                {/* Hover actions */}
+                {hoveredId === item.id && (
+                  <div className="flex items-center gap-1 absolute right-2 top-2.5">
+                    <button
+                      className="p-1 rounded-lg hover:bg-[#e8e0f5] text-[#9d8ec7] hover:text-[#6c47d9] transition-colors"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <MoreHorizontal size={13} />
+                    </button>
+                    <button
+                      className="p-1 rounded-lg hover:bg-[#ffe4e8] text-[#9d8ec7] hover:text-[#e05c8a] transition-colors"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
       {/* Collapsed icons */}
       {collapsed && (
         <div className="flex-1 flex flex-col items-center gap-2 pt-2 px-2">
-          {historyData.slice(0, 7).map((item) => (
+          {sessions.slice(0, 7).map((item) => (
             <button
               key={item.id}
-              title={item.title}
-              onClick={() => onSelect?.(item.id)}
+              title={item.formName}
+              onClick={() => handleSessionClick(item.id)}
               className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all
-                ${
-                  activeId === item.id
-                    ? "bg-gradient-to-br from-[#6c47d9] to-[#8b5cf6] shadow-sm"
-                    : "bg-[#ede9f7] hover:bg-[#e0d8f5]"
+                ${activeId === item.id
+                  ? "bg-gradient-to-br from-[#6c47d9] to-[#8b5cf6] shadow-sm"
+                  : "bg-[#ede9f7] hover:bg-[#e0d8f5]"
                 }`}
             >
-              <MessageSquare
+              <FileText
                 size={14}
                 className={activeId === item.id ? "text-white" : "text-[#9d8ec7]"}
               />

@@ -78,14 +78,14 @@ function FormattingToolbar({
   const fontSizes = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32];
 
   return (
-    <div className="flex items-center gap-1 px-3 py-1.5 bg-[#0f0f11] border-b border-gray-800 flex-wrap">
+    <div className="flex items-center gap-1 px-3 py-1.5 bg-white border-b border-gray-200 flex-wrap shadow-sm">
       {/* Font size */}
       <div className="flex items-center gap-1 mr-1">
-        <Type size={12} className="text-gray-500" />
+        <Type size={12} className="text-gray-400" />
         <select
           value={style.fontSize}
           onChange={(e) => onChange({ fontSize: Number(e.target.value) })}
-          className="bg-gray-800 border border-gray-700 rounded text-white text-[11px] px-1 py-0.5 outline-none"
+          className="bg-gray-50 border border-gray-200 rounded text-gray-700 text-[11px] px-1 py-0.5 outline-none"
         >
           {fontSizes.map((s) => (
             <option key={s} value={s}>{s}</option>
@@ -93,13 +93,13 @@ function FormattingToolbar({
         </select>
       </div>
 
-      <div className="w-px h-4 bg-gray-700 mx-1" />
+      <div className="w-px h-4 bg-gray-200 mx-1" />
 
       {/* Bold */}
       <button
         onClick={() => onChange({ bold: !style.bold })}
         title="Bold"
-        className={`p-1.5 rounded transition-colors ${style.bold ? "bg-violet-600 text-white" : "text-gray-400 hover:text-white hover:bg-gray-800"}`}
+        className={`p-1.5 rounded transition-colors ${style.bold ? "bg-violet-600 text-white" : "text-gray-500 hover:text-violet-600 hover:bg-violet-50"}`}
       >
         <Bold size={13} />
       </button>
@@ -108,7 +108,7 @@ function FormattingToolbar({
       <button
         onClick={() => onChange({ italic: !style.italic })}
         title="Italic"
-        className={`p-1.5 rounded transition-colors ${style.italic ? "bg-violet-600 text-white" : "text-gray-400 hover:text-white hover:bg-gray-800"}`}
+        className={`p-1.5 rounded transition-colors ${style.italic ? "bg-violet-600 text-white" : "text-gray-500 hover:text-violet-600 hover:bg-violet-50"}`}
       >
         <Italic size={13} />
       </button>
@@ -117,12 +117,12 @@ function FormattingToolbar({
       <button
         onClick={() => onChange({ underline: !style.underline })}
         title="Underline"
-        className={`p-1.5 rounded transition-colors ${style.underline ? "bg-violet-600 text-white" : "text-gray-400 hover:text-white hover:bg-gray-800"}`}
+        className={`p-1.5 rounded transition-colors ${style.underline ? "bg-violet-600 text-white" : "text-gray-500 hover:text-violet-600 hover:bg-violet-50"}`}
       >
         <Underline size={13} />
       </button>
 
-      <div className="w-px h-4 bg-gray-700 mx-1" />
+      <div className="w-px h-4 bg-gray-200 mx-1" />
 
       {/* Alignment */}
       {(["left", "center", "right"] as const).map((a) => {
@@ -132,19 +132,19 @@ function FormattingToolbar({
             key={a}
             onClick={() => onChange({ align: a })}
             title={`Align ${a}`}
-            className={`p-1.5 rounded transition-colors ${style.align === a ? "bg-violet-600 text-white" : "text-gray-400 hover:text-white hover:bg-gray-800"}`}
+            className={`p-1.5 rounded transition-colors ${style.align === a ? "bg-violet-600 text-white" : "text-gray-500 hover:text-violet-600 hover:bg-violet-50"}`}
           >
             <Icon size={13} />
           </button>
         );
       })}
 
-      <div className="w-px h-4 bg-gray-700 mx-1" />
+      <div className="w-px h-4 bg-gray-200 mx-1" />
 
       {/* Text colour */}
       <label title="Text colour" className="relative cursor-pointer">
         <div
-          className="w-5 h-5 rounded border border-gray-600"
+          className="w-5 h-5 rounded border border-gray-300"
           style={{ background: style.color }}
         />
         <input
@@ -429,14 +429,14 @@ export default function FormDocument() {
 
   if (!pdfUrl) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-[#141416] border-x border-gray-800">
-        <p className="text-gray-600 text-sm">No PDF loaded</p>
+      <div className="flex-1 flex items-center justify-center bg-gray-50 border-x border-gray-200">
+        <p className="text-gray-400 text-sm">No PDF loaded</p>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-[#141416] border-x border-gray-800 overflow-hidden">
+    <div className="flex-1 flex flex-col bg-white border-x border-gray-200 overflow-hidden">
 
       {/* ── Formatting toolbar ── */}
       <FormattingToolbar
@@ -447,22 +447,22 @@ export default function FormDocument() {
       />
 
       {/* ── Page + zoom controls ── */}
-      <div className="flex items-center justify-between px-4 py-1.5 border-b border-gray-800 bg-[#0f0f11]">
+      <div className="flex items-center justify-between px-4 py-1.5 border-b border-gray-100 bg-gray-50">
         <div className="flex items-center gap-2">
           <button
             onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
             disabled={currentPage <= 1}
-            className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            className="p-1 rounded text-gray-400 hover:text-violet-600 hover:bg-violet-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           >
             <ChevronLeft size={15} />
           </button>
-          <span className="text-gray-400 text-xs">
+          <span className="text-gray-500 text-xs">
             Page {currentPage} / {totalPages}
           </span>
           <button
             onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
             disabled={currentPage >= totalPages}
-            className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            className="p-1 rounded text-gray-400 hover:text-violet-600 hover:bg-violet-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           >
             <ChevronRight size={15} />
           </button>
@@ -471,14 +471,14 @@ export default function FormDocument() {
         <div className="flex items-center gap-1">
           <button
             onClick={() => { setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(1))); setRenderKey((k) => k + 1); }}
-            className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+            className="p-1 rounded text-gray-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
           >
             <ZoomOut size={14} />
           </button>
-          <span className="text-gray-400 text-xs w-10 text-center">{Math.round(zoom * 100)}%</span>
+          <span className="text-gray-500 text-xs w-10 text-center">{Math.round(zoom * 100)}%</span>
           <button
             onClick={() => { setZoom((z) => Math.min(3, +(z + 0.1).toFixed(1))); setRenderKey((k) => k + 1); }}
-            className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+            className="p-1 rounded text-gray-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
           >
             <ZoomIn size={14} />
           </button>
@@ -486,7 +486,7 @@ export default function FormDocument() {
       </div>
 
       {/* ── PDF canvas + overlays ── */}
-      <div className="flex-1 overflow-auto flex justify-center py-6 px-4 bg-[#1a1a1f]">
+      <div className="flex-1 overflow-auto flex justify-center py-6 px-4 bg-gray-100">
         <div
           className="relative shadow-2xl"
           style={{ width: pageSize.width || "auto", height: pageSize.height || "auto" }}
@@ -524,7 +524,7 @@ export default function FormDocument() {
       </div>
 
       {/* ── Footer ── */}
-      <div className="px-4 py-1.5 border-t border-gray-800 bg-[#0f0f11] flex items-center gap-3 text-xs text-gray-500">
+      <div className="px-4 py-1.5 border-t border-gray-100 bg-white flex items-center gap-3 text-xs text-gray-500">
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
           {fields.filter((f) => f.status === "filled").length} filled

@@ -33,6 +33,7 @@ interface FormContextValue {
 
   // Actions
   uploadPdf: (file: File) => Promise<void>;
+  rehydrateSession: (sessionId: string) => Promise<void>;
   setActiveField: (fieldId: string | null) => void;
   sendMessage: (content: string) => Promise<void>;
   approveMemorySave: () => Promise<void>;
@@ -152,6 +153,49 @@ export function FormProvider({ children }: { children: React.ReactNode }) {
       setUploadError(String(err));
       setPdfUrl(null);
       setPdfFile(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // ─── Rehydrate an existing session (e.g. navigated from /chat or sidebar) ──
+
+  const rehydrateSession = useCallback(async (sid: string) => {
+    setIsLoading(true);
+    setUploadError(null);
+    setMessages([]);
+    setFields([]);
+    setSections([]);
+    setActiveFieldId(null);
+    setCompletionPercent(0);
+    setPdfFile(null);
+    setPdfUrl(null);
+
+    try {
+      // 1. Fetch session metadata
+      const sessionRes = await fetch(`/api/session/fields?sessionId=${sid}`);
+      const sessionData = await sessionRes.json();
+      if (!sessionRes.ok) throw new Error(sessionData.error ?? "Session not found");
+
+      setSessionId(sid);
+      if (sessionData.formName) setFormName(sessionData.formName);
+      if (sessionData.totalPages) setTotalPages(sessionData.totalPages);
+
+      const flds: FormField[] = sessionData.fields ?? [];
+      setFields(flds);
+      setSections(buildSections(flds));
+      setCompletionPercent(calcCompletion(flds));
+
+      setMessages([
+        {
+          id: makeId(),
+          role: "assistant",
+          content: `Welcome back! I've restored your session for **${sessionData.formName ?? "your form"}** with **${flds.length} fields** (${flds.filter((f) => f.status === "missing").length} still need filling). Type **"continue"** to pick up where you left off.`,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } catch (err) {
+      setUploadError(String(err));
     } finally {
       setIsLoading(false);
     }
@@ -351,6 +395,7 @@ export function FormProvider({ children }: { children: React.ReactNode }) {
         isChatLoading,
         pendingApproval,
         uploadPdf,
+        rehydrateSession,
         setActiveField: setActiveFieldId,
         sendMessage,
         approveMemorySave,

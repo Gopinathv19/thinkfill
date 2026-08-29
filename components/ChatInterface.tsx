@@ -9,6 +9,7 @@ import {
   FileText,
   X,
   ArrowRight,
+  Loader2,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 
@@ -31,6 +32,9 @@ export default function ChatInterface() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isReady, setIsReady] = useState(false);
+  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -65,25 +69,28 @@ export default function ChatInterface() {
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
 
-    // Simulate assistant response
+    // Simple contextual reply — the real agent runs in the workspace
     setTimeout(() => {
       const count = messages.length + 1;
       let responseText =
-        "I've noted that. Could you tell me more about the specific requirements for this form?";
-      if (count >= 3) {
+        "Got it! Tell me more about what you need help with in this form, or go ahead and upload the PDF directly.";
+      if (uploadedFile) {
         responseText =
-          "I have enough context about your form. You can now open the workspace to start filling it out with my assistance.";
-        setIsReady(true);
+          count >= 2
+            ? "Great — I have all the context I need. Click **Open Workspace** below to start filling out the form with my assistance."
+            : "Thanks! Any other details I should know before we start filling it out?";
+        if (count >= 2) setIsReady(true);
+      } else {
+        if (count >= 3) {
+          responseText =
+            "I have enough context. Upload your PDF when you're ready and then open the workspace — I'll take it from there.";
+        }
       }
       setMessages((prev) => [
         ...prev,
-        {
-          id: Date.now().toString(),
-          role: "assistant",
-          text: responseText,
-        },
+        { id: Date.now().toString(), role: "assistant", text: responseText },
       ]);
-    }, 800);
+    }, 600);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -93,34 +100,94 @@ export default function ChatInterface() {
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file && file.type === "application/pdf") {
-      setUploadedFile(file);
+  // ── Real PDF upload ─────────────────────────────────────────────────────────
+  const uploadFile = async (file: File) => {
+    setUploadError(null);
+    setIsUploading(true);
+    setUploadedFile(file);
+
+    // Optimistic UI message
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now().toString(),
+        role: "assistant",
+        text: `I've received **"${file.name}"**. Analysing the PDF and extracting form fields…`,
+      },
+    ]);
+
+    try {
+      const fd = new FormData();
+      fd.append("pdf", file);
+      const res = await fetch("/api/pdf/extract", { method: "POST", body: fd });
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.error ?? "Failed to process PDF");
+
+      setPendingSessionId(data.sessionId);
+      setIsReady(true);
+
+      const missingCount = (data.fields as { status: string }[]).filter(
+        (f) => f.status === "missing"
+      ).length;
+
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now().toString(),
           role: "assistant",
-          text: `I've received your PDF "${file.name}". Please tell me what you need help with regarding this form — I'll guide you through filling it out.`,
+          text: `✅ Found **${data.fields.length} fields** (${missingCount} need to be filled). Is there anything specific I should know before we start? Or click **Open Workspace** to begin.`,
         },
       ]);
+    } catch (err) {
+      const msg = String(err);
+      setUploadError(msg);
+      setUploadedFile(null);
+      setIsReady(false);
+      setPendingSessionId(null);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          role: "assistant",
+          text: `Sorry, I couldn't process that PDF: ${msg}. Please try another file.`,
+        },
+      ]);
+    } finally {
+      setIsUploading(false);
     }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && file.type === "application/pdf") {
+      uploadFile(file);
+    } else if (file) {
+      alert("Please upload a PDF file.");
+    }
+    // reset so same file can be re-selected
+    e.target.value = "";
   };
 
   const removeFile = () => {
     setUploadedFile(null);
-    if (fileInputRef.current) fileInputRef.current.value = "";
+    setIsReady(false);
+    setPendingSessionId(null);
+    setUploadError(null);
   };
 
   const goToWorkspace = () => {
-    router.push("/workspace");
+    if (pendingSessionId) {
+      router.push(`/workspace?session=${pendingSessionId}`);
+    } else {
+      router.push("/workspace");
+    }
   };
 
-  // The input box markup — shared between welcome & conversation states
+  // ── Input box ────────────────────────────────────────────────────────────────
   const inputBox = (
     <div className="w-full max-w-2xl mx-auto">
-      {/* File badge above input */}
+      {/* File badge above input (welcome state) */}
       {uploadedFile && !hasConversation && (
         <div className="mb-3 flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-[#f0ebff] border border-[#d4c6f5]">
           <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#6c47d9] to-[#8b5cf6] flex items-center justify-center flex-shrink-0">
@@ -128,15 +195,24 @@ export default function ChatInterface() {
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-[#2d1b69] truncate">{uploadedFile.name}</p>
-            <p className="text-[10px] text-[#9d8ec7]">{(uploadedFile.size / 1024).toFixed(1)} KB · PDF</p>
+            <p className="text-[10px] text-[#9d8ec7]">
+              {(uploadedFile.size / 1024).toFixed(1)} KB · PDF
+              {isUploading && " · Uploading…"}
+            </p>
           </div>
-          <button
-            onClick={removeFile}
-            className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-[#e0d5f7] text-[#9d8ec7] hover:text-[#6c47d9] transition-colors"
-          >
-            <X size={13} />
-          </button>
+          {!isUploading && (
+            <button
+              onClick={removeFile}
+              className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-[#e0d5f7] text-[#9d8ec7] hover:text-[#6c47d9] transition-colors"
+            >
+              <X size={13} />
+            </button>
+          )}
         </div>
+      )}
+
+      {uploadError && (
+        <p className="mb-2 text-xs text-red-500 text-center">{uploadError}</p>
       )}
 
       <div
@@ -153,19 +229,20 @@ export default function ChatInterface() {
           onKeyDown={handleKeyDown}
           onFocus={() => setIsFocused(true)}
           onBlur={() => setIsFocused(false)}
-          placeholder={uploadedFile ? "Describe what you need help with in this form..." : "Ask your question here"}
+          placeholder={uploadedFile ? "Describe what you need help with…" : "Ask your question here"}
           rows={1}
           className="w-full resize-none bg-transparent px-4 pt-4 pb-2 text-[#2d1b69] placeholder-[#c4b8e8] text-sm outline-none leading-relaxed min-h-[56px] max-h-[200px] overflow-y-auto"
         />
         <div className="flex items-center justify-between px-3 pb-3 pt-1">
           <button
             onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
             className="w-8 h-8 rounded-full border border-[#d8d0ee] flex items-center justify-center
               text-[#9d8ec7] hover:text-[#6c47d9] hover:border-[#8b5cf6] hover:bg-[#f0ebff]
-              transition-all duration-150"
+              disabled:opacity-40 transition-all duration-150"
             title="Upload PDF"
           >
-            <Plus size={16} />
+            {isUploading ? <Loader2 size={15} className="animate-spin" /> : <Plus size={16} />}
           </button>
           <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={handleFileChange} />
           <div className="flex items-center gap-2">
@@ -198,14 +275,12 @@ export default function ChatInterface() {
 
   return (
     <div className="flex-1 flex flex-col h-full bg-white overflow-hidden">
-      {/* ── WELCOME STATE: everything centered together ── */}
+      {/* ── WELCOME STATE ── */}
       {!hasConversation && (
         <div className="flex-1 flex flex-col items-center justify-center px-4">
-          {/* Logo */}
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#6c47d9] to-[#8b5cf6] flex items-center justify-center shadow-lg mb-5 select-none">
             <Sparkles size={26} className="text-white" />
           </div>
-          {/* Greeting */}
           <h1 className="text-3xl font-semibold mb-2 text-center select-none">
             <span className="text-[#4b3a8a]">{greeting}, </span>
             <span className="bg-gradient-to-r from-[#e05c8a] to-[#c04880] bg-clip-text text-transparent">
@@ -215,7 +290,6 @@ export default function ChatInterface() {
           <p className="text-[#9d8ec7] text-base font-normal mb-8 select-none">
             Upload a PDF or describe what you need to fill out.
           </p>
-          {/* Input box inline in the center */}
           <div className="w-full">{inputBox}</div>
         </div>
       )}
@@ -224,21 +298,30 @@ export default function ChatInterface() {
       {hasConversation && (
         <>
           <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-            {/* File badge at top */}
+            {/* File badge at top of conversation */}
             {uploadedFile && (
               <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#f0ebff] border border-[#d4c6f5] w-fit">
-                <FileText size={13} className="text-[#6c47d9]" />
+                {isUploading ? (
+                  <Loader2 size={13} className="text-[#6c47d9] animate-spin" />
+                ) : (
+                  <FileText size={13} className="text-[#6c47d9]" />
+                )}
                 <span className="text-[11px] font-medium text-[#6c47d9] max-w-[200px] truncate">
                   {uploadedFile.name}
                 </span>
-                <button onClick={removeFile}>
-                  <X size={11} className="text-[#9d8ec7] hover:text-[#6c47d9]" />
-                </button>
+                {!isUploading && (
+                  <button onClick={removeFile}>
+                    <X size={11} className="text-[#9d8ec7] hover:text-[#6c47d9]" />
+                  </button>
+                )}
               </div>
             )}
 
             {messages.map((msg) => (
-              <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div
+                key={msg.id}
+                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+              >
                 {msg.role === "assistant" && (
                   <div className="w-7 h-7 rounded-xl bg-gradient-to-br from-[#6c47d9] to-[#8b5cf6] flex items-center justify-center flex-shrink-0 mr-2 mt-0.5">
                     <Sparkles size={13} className="text-white" />
@@ -251,7 +334,14 @@ export default function ChatInterface() {
                       : "bg-[#f0ebff] text-[#2d1b69] rounded-tl-sm"
                     }`}
                 >
-                  {msg.text}
+                  {/* Simple bold-markdown renderer */}
+                  {msg.text.split(/(\*\*[^*]+\*\*)/).map((part, i) =>
+                    part.startsWith("**") && part.endsWith("**") ? (
+                      <strong key={i}>{part.slice(2, -2)}</strong>
+                    ) : (
+                      <span key={i}>{part}</span>
+                    )
+                  )}
                 </div>
               </div>
             ))}
@@ -274,10 +364,10 @@ export default function ChatInterface() {
                 </div>
               </div>
             )}
+
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Input at bottom during conversation */}
           <div className="border-t border-[#e8e4f4] px-4 pb-4 pt-3">
             {inputBox}
           </div>
