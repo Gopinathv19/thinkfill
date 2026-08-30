@@ -375,6 +375,38 @@ export async function updateFieldValue(
  * role and content — is what lets the agent remember on turn 5 what it already
  * looked up on turn 2, instead of re-running every tool from scratch.
  */
+/**
+ * Clear one field, or every field in the session when `fieldKey` is omitted.
+ *
+ * Clearing is not the same as filling with an empty string: the row has to go
+ * back to `missing` with no source, or the navigator keeps counting it as
+ * complete and find_memory_matches skips it as already answered.
+ *
+ * Returns how many fields were actually cleared, so the caller can tell the
+ * user "cleared 8 fields" rather than guessing.
+ */
+export async function clearFieldValues(
+  sessionId: string,
+  fieldKey?: string
+): Promise<number> {
+  const sql = getSql();
+  const result = fieldKey
+    ? await sql`
+        UPDATE form_fields
+        SET value = '', status = 'missing', source = NULL
+        WHERE session_id = ${sessionId} AND field_key = ${fieldKey}
+        RETURNING id
+      `
+    : await sql`
+        UPDATE form_fields
+        SET value = '', status = 'missing', source = NULL
+        WHERE session_id = ${sessionId}
+          AND (value <> '' OR status <> 'missing')
+        RETURNING id
+      `;
+  return rows(result).length;
+}
+
 export interface StoredChatMessage {
   id: number;
   role: "system" | "user" | "assistant" | "tool";

@@ -65,6 +65,7 @@ function inferToolName(payload: Payload): string | null {
   if ("matchCount" in payload) return "find_memory_matches";
   if ("field_id" in payload) return "fill_form_field";
   if ("memory" in payload && "count" in payload) return "list_user_memory";
+  if ("cleared" in payload) return "clear_all_form_fields";
   return null;
 }
 
@@ -141,6 +142,29 @@ export function summarizeToolStep(
         kind: "memory",
         label: `Saved ${key} to your profile`,
         detail: payload.value != null ? truncate(String(payload.value)) : undefined,
+      };
+    }
+
+    case "clear_form_field": {
+      const field = prettifyKey(String(payload.field_id ?? "a field"));
+      if (payload.success === false) {
+        return {
+          kind: "error",
+          label: `Could not clear ${field}`,
+          detail: typeof payload.error === "string" ? truncate(payload.error, 120) : undefined,
+        };
+      }
+      return { kind: "fill", label: `Cleared ${field}` };
+    }
+
+    case "clear_all_form_fields": {
+      const cleared = Number(payload.cleared ?? 0);
+      return {
+        kind: "fill",
+        label:
+          cleared === 0
+            ? "Nothing to clear — the form was already empty"
+            : `Cleared all ${cleared} ${cleared === 1 ? "field" : "fields"}`,
       };
     }
 

@@ -21,6 +21,7 @@ import {
   getSession,
   getSessionFields,
   updateFieldValue,
+  clearFieldValues,
   getMemory,
   saveMemory,
   getAllMemory,
@@ -103,6 +104,24 @@ const TOOL_DEFINITIONS = [
       },
       required: ["field_key", "value"],
     },
+  },
+  {
+    name: "clear_form_field",
+    description:
+      "Empties one field, returning it to 'missing'. Use only when the user explicitly asks to clear, remove, reset or re-enter a value. Never clear a field to 'make room' for a new value — fill_form_field overwrites on its own.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        field_id: { type: "string", description: "The field id from get_form_state" },
+      },
+      required: ["field_id"],
+    },
+  },
+  {
+    name: "clear_all_form_fields",
+    description:
+      "Empties every field in the form so the user can start over. Destructive and not undoable — call it only when the user has clearly asked to clear or reset the whole form, and say how many fields were cleared afterwards. Never call it to fix a single wrong value; use clear_form_field for that.",
+    inputSchema: { type: "object", properties: {}, required: [] },
   },
 ];
 
@@ -276,6 +295,35 @@ async function executeTool(
         field_key: saved.field_key,
         value: saved.value,
         message: `Saved '${saved.field_key}' to the user's profile for future forms.`,
+      };
+    }
+
+    case "clear_form_field": {
+      if (!args.field_id) return { success: false, error: "field_id is required" };
+
+      const fieldId = await resolveFieldId(ctx.sessionId, args.field_id);
+      if (!fieldId) {
+        return {
+          success: false,
+          error: `No field '${args.field_id}' in this form. Call get_form_state for the valid ids.`,
+        };
+      }
+
+      const cleared = await clearFieldValues(ctx.sessionId, fieldId);
+      return cleared > 0
+        ? { success: true, field_id: fieldId, cleared: 1 }
+        : { success: false, error: `Could not clear field '${fieldId}'.` };
+    }
+
+    case "clear_all_form_fields": {
+      const cleared = await clearFieldValues(ctx.sessionId);
+      return {
+        success: true,
+        cleared,
+        message:
+          cleared === 0
+            ? "The form was already empty; nothing to clear."
+            : `Cleared ${cleared} ${cleared === 1 ? "field" : "fields"}. The form is now empty.`,
       };
     }
 

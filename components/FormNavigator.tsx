@@ -10,6 +10,8 @@ import {
   ChevronDown,
   ChevronRight,
   RotateCcw,
+  Eraser,
+  Loader2,
 } from "lucide-react";
 import type { FormField } from "@/lib/types";
 
@@ -46,9 +48,34 @@ export default function FormNavigator() {
     formName,
     fields,
     resetSession,
+    sessionId,
+    refreshFields,
   } = useFormContext();
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Two-step confirm rather than a browser dialog: clearing is not undoable,
+  // and the button sits next to one that navigates away.
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
+
+  const clearAll = async () => {
+    if (!sessionId || clearing) return;
+    setConfirmingClear(false);
+    setClearing(true);
+    try {
+      const res = await fetch("/api/session/fields", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId }),
+      });
+      if (!res.ok) throw new Error(`Clear failed (${res.status})`);
+      await refreshFields();
+    } catch (err) {
+      console.error("[FormNavigator] clear all failed", err);
+    } finally {
+      setClearing(false);
+    }
+  };
 
   const toggleSection = (id: string) => {
     setCollapsed((prev) => {
@@ -70,13 +97,41 @@ export default function FormNavigator() {
           <h2 className="text-gray-900 text-sm font-semibold truncate pr-2" title={formName}>
             {formName || "Form Navigator"}
           </h2>
-          <button
-            onClick={resetSession}
-            title="Upload a new form"
-            className="p-1.5 rounded-md text-gray-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
-          >
-            <RotateCcw size={13} />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {confirmingClear ? (
+              <>
+                <button
+                  onClick={clearAll}
+                  className="px-2 py-1 rounded-md bg-red-500 text-white text-[10px] font-semibold hover:bg-red-600 transition-colors"
+                  title="Empty every field in this form"
+                >
+                  Clear all
+                </button>
+                <button
+                  onClick={() => setConfirmingClear(false)}
+                  className="px-2 py-1 rounded-md border border-gray-200 text-gray-500 text-[10px] font-medium hover:text-gray-700 transition-colors"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setConfirmingClear(true)}
+                disabled={clearing || filledCount === 0}
+                title={filledCount === 0 ? "Nothing to clear" : "Clear every field"}
+                className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
+              >
+                {clearing ? <Loader2 size={13} className="animate-spin" /> : <Eraser size={13} />}
+              </button>
+            )}
+            <button
+              onClick={resetSession}
+              title="Upload a new form"
+              className="p-1.5 rounded-md text-gray-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
+            >
+              <RotateCcw size={13} />
+            </button>
+          </div>
         </div>
 
         {/* Progress bar */}

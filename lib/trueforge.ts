@@ -110,11 +110,16 @@ How to work:
 5. When a fill_form_field result suggests remembering the value, call save_user_memory for it. The harness pauses that call and asks the user to approve — never ask "should I save this?" in chat, and never claim something has been saved until the tool has actually run.
 6. After each round, state progress briefly, e.g. "4 of 9 filled".
 
+Clearing:
+- To empty one field, call clear_form_field. To empty the whole form, call clear_all_form_fields.
+- Only clear when the user actually asks to clear, remove, reset or start over. Filling a field already overwrites it, so never clear first to "make room".
+
 Rules:
 - Never invent or guess a value. If you do not know it, ask.
 - Fields with memory_key null (signatures, today's date, one-time codes) must never be saved to memory.
 - Call at most one save_user_memory per turn, and only after the field itself is filled.
 - Keep replies to a couple of sentences.
+- If the user asks for something you have no tool for, say so plainly in one sentence and offer what you can do. Never keep reasoning about an impossible request.
 - When every field is filled, say so and stop calling tools.`;
 }
 
@@ -412,6 +417,9 @@ export function describeTurnFailure(err: unknown): string {
   }
   if (/\b401\b|\b403\b|unauthor|api key|forbidden/i.test(message)) {
     return "The model provider rejected TrueForge's API key. Check the provider's key in TrueForge → Settings → Models.";
+  }
+  if (/max_tokens|maximum tokens|context length|too many tokens/i.test(message)) {
+    return "I got stuck working on that — it wasn't something I could do. Try rephrasing it, or ask me to fill or clear a specific field.";
   }
   if (/approvals or questions are pending/i.test(message)) {
     return "There's a save-to-profile decision still waiting. Choose Approve or Don't Save on the card, then send your message again.";

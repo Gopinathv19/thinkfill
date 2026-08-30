@@ -5,9 +5,13 @@
  * PATCH /api/session/fields
  * Writes one field value — used when the user edits a field directly in the
  * document view (agent-driven edits go through the MCP server instead).
+ *
+ * DELETE /api/session/fields
+ * Empties every field in a session, so starting over does not depend on the
+ * agent understanding the request.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionFields, getSession, updateFieldValue } from "@/lib/db";
+import { getSessionFields, getSession, updateFieldValue, clearFieldValues } from "@/lib/db";
 
 export const runtime = "nodejs";
 
@@ -70,5 +74,34 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ success: true, fieldId, value });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  let body: { sessionId?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const { sessionId } = body;
+  if (!sessionId) {
+    return NextResponse.json({ error: "sessionId is required" }, { status: 400 });
+  }
+
+  try {
+    const session = await getSession(sessionId);
+    if (!session) {
+      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    }
+
+    // Only the form is emptied. The saved profile is untouched: clearing a form
+    // says nothing about whether the user still wants those values remembered.
+    const cleared = await clearFieldValues(sessionId);
+    return NextResponse.json({ success: true, cleared });
+  } catch (err) {
+    console.error("[DELETE /api/session/fields]", err);
+    return NextResponse.json({ error: "Could not clear the form" }, { status: 500 });
   }
 }

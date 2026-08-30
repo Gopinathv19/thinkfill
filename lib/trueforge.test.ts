@@ -93,3 +93,20 @@ test("a malformed wrapper degrades instead of throwing", () => {
   assert.equal(missingInput.name, "get_form_state");
   assert.deepEqual(missingInput.args, {});
 });
+
+/**
+ * A small model handed an impossible instruction can spiral until it hits the
+ * provider's output cap. The raw "max_tokens breached" tells the user nothing
+ * they can act on, and the instinctive fix — raising the cap — just buys a
+ * longer spiral.
+ */
+test("a runaway completion is explained in terms the user can act on", () => {
+  for (const raw of [
+    new Error("max_tokens breached"),
+    new Error("This model's maximum context length is 131072 tokens"),
+  ]) {
+    const message = describeTurnFailure(raw);
+    assert.doesNotMatch(message, /max_tokens/);
+    assert.match(message, /rephras|specific field/i);
+  }
+});

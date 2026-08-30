@@ -87,3 +87,23 @@ test("an unknown tool is named rather than dumped", () => {
   const step = summarizeToolStep("some_new_tool", JSON.stringify({ ok: true }));
   assert.equal(step?.label, "Ran some new tool");
 });
+
+test("clearing one field reads as clearing, not filling", () => {
+  const step = summarizeToolStep(
+    "clear_form_field",
+    JSON.stringify({ success: true, field_id: "phone-number", cleared: 1 })
+  );
+  assert.equal(step?.label, "Cleared phone number");
+});
+
+test("clearing the whole form reports how many fields went", () => {
+  const many = summarizeToolStep("clear_all_form_fields", JSON.stringify({ success: true, cleared: 8 }));
+  assert.equal(many?.label, "Cleared all 8 fields");
+
+  const one = summarizeToolStep("clear_all_form_fields", JSON.stringify({ success: true, cleared: 1 }));
+  assert.equal(one?.label, "Cleared all 1 field");
+
+  // An empty form is a no-op, and saying "cleared 0 fields" reads as a failure.
+  const none = summarizeToolStep("clear_all_form_fields", JSON.stringify({ success: true, cleared: 0 }));
+  assert.match(none!.label, /already empty/);
+});
