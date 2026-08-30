@@ -1,9 +1,10 @@
 /**
- * Approvals for writes to the user's persistent profile.
+ * Human approval for the agent's irreversible actions.
  *
- * When the agent calls save_user_memory, TrueForge pauses the tool call and
- * the paused call is recorded here as a pending approval. Nothing is written
- * until the user decides:
+ * Two tools pause for the user: `save_user_memory` (writes to their profile)
+ * and `clear_all_form_fields` (wipes the form). TrueForge pauses the call and
+ * it is recorded here as a pending approval. Nothing happens until the user
+ * decides:
  *
  *  - approve → the harness turn is resumed with `allow`; TrueForge executes
  *    save_user_memory against /api/mcp/[sessionId], which performs the write.
@@ -80,9 +81,13 @@ export async function POST(req: NextRequest) {
     // Record the outcome in the conversation so the user sees it and the agent
     // knows on its next turn not to ask again.
     const note =
-      decision === "approve"
-        ? `Saved **${approval.label}** to your profile — I'll fill it in automatically on future forms.`
-        : `Understood, I won't save **${approval.label}** to your profile.`;
+      approval.kind === "clear_all_fields"
+        ? decision === "approve"
+          ? "Clearing the form now."
+          : "Understood — I've left the form as it was."
+        : decision === "approve"
+          ? `Saved **${approval.label}** to your profile — I'll fill it in automatically on future forms.`
+          : `Understood, I won't save **${approval.label}** to your profile.`;
 
     await appendChatMessages(approval.sessionId, [
       { role: "assistant", content: note },
@@ -107,7 +112,10 @@ export async function POST(req: NextRequest) {
                   ? { status: "allow" }
                   : {
                       status: "deny",
-                      reason: "The user declined saving this value to their profile.",
+                      reason:
+                        approval.kind === "clear_all_fields"
+                          ? "The user declined clearing the form. Leave every field as it is."
+                          : "The user declined saving this value to their profile.",
                     },
             },
           ]);

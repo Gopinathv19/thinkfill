@@ -65,6 +65,7 @@ function inferToolName(payload: Payload): string | null {
   if ("matchCount" in payload) return "find_memory_matches";
   if ("field_id" in payload) return "fill_form_field";
   if ("memory" in payload && "count" in payload) return "list_user_memory";
+  if ("filledCount" in payload) return "fill_from_memory";
   if ("cleared" in payload) return "clear_all_form_fields";
   return null;
 }
@@ -142,6 +143,19 @@ export function summarizeToolStep(
         kind: "memory",
         label: `Saved ${key} to your profile`,
         detail: payload.value != null ? truncate(String(payload.value)) : undefined,
+      };
+    }
+
+    case "fill_from_memory": {
+      const count = Number(payload.filledCount ?? 0);
+      const remaining = Array.isArray(payload.stillMissing) ? payload.stillMissing.length : 0;
+      if (count === 0) {
+        return { kind: "memory", label: "Nothing in your profile matched the empty fields" };
+      }
+      return {
+        kind: "fill",
+        label: `Filled ${count} ${count === 1 ? "field" : "fields"} from your profile`,
+        detail: remaining > 0 ? `${remaining} still need you` : undefined,
       };
     }
 

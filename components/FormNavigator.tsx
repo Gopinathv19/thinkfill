@@ -12,6 +12,7 @@ import {
   RotateCcw,
   Eraser,
   Loader2,
+  Sparkles,
 } from "lucide-react";
 import type { FormField } from "@/lib/types";
 
@@ -57,6 +58,33 @@ export default function FormNavigator() {
   // and the button sits next to one that navigates away.
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [clearing, setClearing] = useState(false);
+
+  const [filling, setFilling] = useState(false);
+
+  /**
+   * Fill every known field straight from the profile.
+   *
+   * The agent can do this too, but a deterministic action must not be
+   * reachable only through a model — in a long session a small model starts
+   * reporting the fill without performing it. This path always works.
+   */
+  const fillFromProfile = async () => {
+    if (!sessionId || filling) return;
+    setFilling(true);
+    try {
+      const res = await fetch("/api/session/fill-from-memory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId }),
+      });
+      if (!res.ok) throw new Error(`Fill failed (${res.status})`);
+      await refreshFields();
+    } catch (err) {
+      console.error("[FormNavigator] fill from profile failed", err);
+    } finally {
+      setFilling(false);
+    }
+  };
 
   const clearAll = async () => {
     if (!sessionId || clearing) return;
@@ -115,14 +143,28 @@ export default function FormNavigator() {
                 </button>
               </>
             ) : (
-              <button
-                onClick={() => setConfirmingClear(true)}
+              <>
+                <button
+                  onClick={fillFromProfile}
+                  disabled={filling || missingCount === 0}
+                  title={
+                    missingCount === 0
+                      ? "Nothing left to fill"
+                      : "Fill everything known from your saved profile"
+                  }
+                  className="p-1.5 rounded-md text-gray-400 hover:text-violet-600 hover:bg-violet-50 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
+                >
+                  {filling ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                </button>
+                <button
+                  onClick={() => setConfirmingClear(true)}
                 disabled={clearing || filledCount === 0}
                 title={filledCount === 0 ? "Nothing to clear" : "Clear every field"}
                 className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
               >
-                {clearing ? <Loader2 size={13} className="animate-spin" /> : <Eraser size={13} />}
-              </button>
+                  {clearing ? <Loader2 size={13} className="animate-spin" /> : <Eraser size={13} />}
+                </button>
+              </>
             )}
             <button
               onClick={resetSession}

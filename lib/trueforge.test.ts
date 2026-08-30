@@ -11,7 +11,13 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeTurnFailure, TurnStalledError, unwrapToolCall } from "./trueforge";
+import {
+  describeTurnFailure,
+  TurnStalledError,
+  unwrapToolCall,
+  buildFormAgentSpec as buildFormAgentSpecForTest,
+  specFingerprint as specFingerprintForTest,
+} from "./trueforge";
 
 test("rate limiting is reported as rate limiting, not a raw status code", () => {
   for (const raw of [
@@ -109,4 +115,27 @@ test("a runaway completion is explained in terms the user can act on", () => {
     assert.doesNotMatch(message, /max_tokens/);
     assert.match(message, /rephras|specific field/i);
   }
+});
+
+/**
+ * Wiping a form is destructive and not undoable, so it goes through the same
+ * human gate as a profile write. A session's spec is snapshotted at creation,
+ * so the gate only reaches existing sessions if the fingerprint changes with
+ * the policy — otherwise old forms keep clearing without asking.
+ */
+test("the destructive tools are the ones gated behind human approval", () => {
+  const spec = buildFormAgentSpecForTest("Test Form", "thinkfill-abc", "provider/model");
+  const gated = spec.mcpServers?.[0]?.requireApprovalForTools ?? [];
+
+  assert.ok(gated.includes("save_user_memory"), "profile writes must be gated");
+  assert.ok(gated.includes("clear_all_form_fields"), "wiping the form must be gated");
+  // Gating every fill would prompt on each field and make the agent unusable.
+  assert.ok(!gated.includes("fill_form_field"));
+  assert.ok(!gated.includes("clear_form_field"));
+});
+
+test("the spec fingerprint changes with the spec, not just the model", () => {
+  const a = specFingerprintForTest("nvidia-nim/nemotron-3-nano");
+  assert.match(a, /^nvidia-nim\/nemotron-3-nano@v\d+$/);
+  assert.notEqual(a, specFingerprintForTest("nvidia-nim/kimi-k3"));
 });

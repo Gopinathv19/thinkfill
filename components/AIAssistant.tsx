@@ -141,33 +141,62 @@ function ApprovalCard() {
   const { pendingApproval, approveMemorySave, rejectMemorySave } = useFormContext();
   if (!pendingApproval) return null;
 
+  // A destructive action must not wear the same clothes as a save prompt —
+  // one adds a value to the profile, the other throws the user's work away.
+  const isDestructive = pendingApproval.kind === "clear_all_fields";
+
   return (
-    <div className="mx-3 mb-3 p-3 rounded-xl bg-violet-50 border border-violet-200">
+    <div
+      className={`mx-3 mb-3 p-3 rounded-xl border ${
+        isDestructive ? "bg-red-50 border-red-200" : "bg-violet-50 border-violet-200"
+      }`}
+    >
       <div className="flex items-start gap-2 mb-3">
-        <Database size={15} className="text-violet-600 mt-0.5 shrink-0" />
+        {isDestructive ? (
+          <AlertTriangle size={15} className="text-red-600 mt-0.5 shrink-0" />
+        ) : (
+          <Database size={15} className="text-violet-600 mt-0.5 shrink-0" />
+        )}
         <div className="flex-1">
-          <p className="text-xs font-semibold text-violet-700 mb-1">Save to profile memory?</p>
+          <p
+            className={`text-xs font-semibold mb-1 ${
+              isDestructive ? "text-red-700" : "text-violet-700"
+            }`}
+          >
+            {isDestructive ? "Clear the whole form?" : "Save to profile memory?"}
+          </p>
           <p className="text-[11px] text-gray-600 leading-relaxed">
-            Save <span className="text-gray-900 font-medium">{pendingApproval.label}</span>:{" "}
-            <span className="text-violet-600">&quot;{pendingApproval.value}&quot;</span>{" "}
-            to your profile so it can be auto-filled in future forms.
+            {isDestructive ? (
+              <>
+                This empties <span className="text-gray-900 font-medium">every field</span> on
+                this form. It can&apos;t be undone — your saved profile is not affected.
+              </>
+            ) : (
+              <>
+                Save <span className="text-gray-900 font-medium">{pendingApproval.label}</span>:{" "}
+                <span className="text-violet-600">&quot;{pendingApproval.value}&quot;</span> to
+                your profile so it can be auto-filled in future forms.
+              </>
+            )}
           </p>
         </div>
       </div>
       <div className="flex gap-2">
         <button
           onClick={approveMemorySave}
-          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold transition-colors"
+          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-white text-xs font-semibold transition-colors ${
+            isDestructive ? "bg-red-600 hover:bg-red-700" : "bg-violet-600 hover:bg-violet-700"
+          }`}
         >
           <CheckCircle size={12} />
-          Approve &amp; Save
+          {isDestructive ? "Yes, clear it" : "Approve & Save"}
         </button>
         <button
           onClick={rejectMemorySave}
           className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-white hover:bg-gray-100 text-gray-600 text-xs font-medium border border-gray-200 transition-colors"
         >
           <XCircle size={12} />
-          Don&apos;t Save
+          {isDestructive ? "Keep my answers" : "Don't Save"}
         </button>
       </div>
     </div>

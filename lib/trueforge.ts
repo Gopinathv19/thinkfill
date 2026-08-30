@@ -104,7 +104,7 @@ You are working on one form: "${formName}". Every tool acts on that form automat
 
 How to work:
 1. Call get_form_state to see which fields are filled and which are missing.
-2. Call find_memory_matches. For every match it returns, call fill_form_field with source="memory". Do not ask the user about these — they are already known.
+2. Call fill_from_memory ONCE. It fills every field already known from the profile in a single step and tells you which fields still need the user. Never call fill_form_field in a loop to do this — fill_from_memory has already done it.
 3. For fields the user must supply, ask for ONE at a time, in plain language. Never ask for several fields in a single message.
 4. When the user answers, call fill_form_field with source="user".
 5. When a fill_form_field result suggests remembering the value, call save_user_memory for it. The harness pauses that call and asks the user to approve — never ask "should I save this?" in chat, and never claim something has been saved until the tool has actually run.
@@ -113,6 +113,7 @@ How to work:
 Clearing:
 - To empty one field, call clear_form_field. To empty the whole form, call clear_all_form_fields.
 - Only clear when the user actually asks to clear, remove, reset or start over. Filling a field already overwrites it, so never clear first to "make room".
+- clear_all_form_fields pauses for the user to confirm, exactly like save_user_memory. Do not ask "are you sure?" in chat yourself, and never say the form has been cleared until the tool has actually returned.
 
 Rules:
 - Never invent or guess a value. If you do not know it, ask.
@@ -175,8 +176,25 @@ export interface TrueForgeRefs {
   mcpServerName: string;
 }
 
+/**
+ * Bumped whenever the agent spec changes in a way existing sessions must pick
+ * up — new instructions, a different tool-approval policy.
+ *
+ * A session's spec is snapshotted at creation, so without this a change like
+ * "clearing the form now needs confirmation" would apply only to sessions
+ * created afterwards, and every existing form would keep the old, ungated
+ * behaviour. Recorded alongside the model in `tf_model`, which already drives
+ * the migration.
+ */
+const AGENT_SPEC_VERSION = 4;
+
+/** What `tf_model` stores: the model plus the spec revision it was built with. */
+export function specFingerprint(model: string): string {
+  return `${model}@v${AGENT_SPEC_VERSION}`;
+}
+
 /** The form-filling agent definition, shared by session create and update. */
-function buildFormAgentSpec(
+export function buildFormAgentSpec(
   formName: string,
   mcpServerName: string,
   model: string
@@ -193,15 +211,27 @@ function buildFormAgentSpec(
       {
         name: mcpServerName,
         preload: true,
-        // Only the memory write pauses for a human. Everything else —
+        // The two actions a user would not want taken on their behalf:
+        // writing to their profile, and wiping the form. Everything else —
         // including fill_form_field, which TrueForge would otherwise
         // classify as a write tool and pause on every call — runs freely.
-        requireApprovalForTools: ["save_user_memory"],
+        // Clearing a single field is deliberately not gated; it is trivially
+        // undone by refilling, and prompting for it would be noise.
+        requireApprovalForTools: ["save_user_memory", "clear_all_form_fields"],
       },
     ],
     config: {
       iterationLimit: 16,
       sandbox: { enabled: false },
+      contextManagement: {
+        // The default threshold is 50k tokens, which assumes a model that
+        // still follows instructions at 50k. A small model does not: at ~20k
+        // of accumulated form JSON it starts answering from the conversation
+        // instead of calling tools, and reports work it never did. Compacting
+        // earlier keeps the working context inside the range the model is
+        // actually reliable in.
+        compaction: { enabled: true, compactionThresholdTokens: 12_000 },
+      },
       // The chat panel renders plain text and this workload never needs
       // subagents; disabling both keeps small models on the rails.
       dynamicSubAgents: { enabled: false },
@@ -232,8 +262,10 @@ export async function ensureTrueForgeSession(session: {
   const client = getTrueForgeClient();
   const model = await resolveModelName();
 
+  const fingerprint = specFingerprint(model);
+
   if (session.tf_session_id && session.mcp_server_name) {
-    if (session.tf_model !== model) {
+    if (session.tf_model !== fingerprint) {
       await client.sessions.update(session.tf_session_id, {
         agent: {
           spec: buildFormAgentSpec(
@@ -247,7 +279,7 @@ export async function ensureTrueForgeSession(session: {
         session.id,
         session.tf_session_id,
         session.mcp_server_name,
-        model
+        fingerprint
       );
     }
     return {
@@ -276,7 +308,7 @@ export async function ensureTrueForgeSession(session: {
   });
 
   const tfSessionId = created.data.id;
-  await setSessionTrueForgeRefs(session.id, tfSessionId, mcpServerName, model);
+  await setSessionTrueForgeRefs(session.id, tfSessionId, mcpServerName, fingerprint);
 
   return { tfSessionId, mcpServerName };
 }

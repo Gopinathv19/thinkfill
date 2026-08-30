@@ -107,3 +107,18 @@ test("clearing the whole form reports how many fields went", () => {
   const none = summarizeToolStep("clear_all_form_fields", JSON.stringify({ success: true, cleared: 0 }));
   assert.match(none!.label, /already empty/);
 });
+
+test("a bulk profile fill reports the count and what is left", () => {
+  const step = summarizeToolStep(
+    "fill_from_memory",
+    JSON.stringify({ success: true, filledCount: 7, filled: [], stillMissing: [{}, {}] })
+  );
+  assert.equal(step?.label, "Filled 7 fields from your profile");
+  assert.equal(step?.detail, "2 still need you");
+
+  const none = summarizeToolStep(
+    "fill_from_memory",
+    JSON.stringify({ success: true, filledCount: 0, filled: [], stillMissing: [{}] })
+  );
+  assert.match(none!.label, /Nothing in your profile matched/);
+});

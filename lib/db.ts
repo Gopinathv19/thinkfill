@@ -164,6 +164,14 @@ async function createSchema() {
       ADD COLUMN IF NOT EXISTS tf_tool_call_id TEXT
   `;
 
+  // Not every paused tool call is a profile write. Clearing the whole form is
+  // destructive and asks for the same human gate, so the table now records
+  // which action is waiting. Existing rows are memory saves.
+  await sql`
+    ALTER TABLE memory_approvals
+      ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'memory_save'
+  `;
+
   const demoUserId = process.env.DEMO_USER_ID ?? "demo-user-001";
   await sql`
     INSERT INTO users (id, name)
@@ -375,6 +383,55 @@ export async function updateFieldValue(
  * role and content — is what lets the agent remember on turn 5 what it already
  * looked up on turn 2, instead of re-running every tool from scratch.
  */
+/** One field filled from the saved profile. */
+export interface FilledFromMemory {
+  field_id: string;
+  label: string;
+  value: string;
+}
+
+/**
+ * Fill every missing field that has a saved value, in one operation.
+ *
+ * Shared by the `fill_from_memory` MCP tool and the workspace's "Fill from
+ * profile" button. The work is entirely deterministic — the matches are known
+ * here — so it must not depend on a model issuing one tool call per field.
+ *
+ * Only `missing` fields are touched; a value the user has already entered is
+ * never overwritten by the profile.
+ */
+export async function fillFieldsFromMemory(
+  sessionId: string,
+  userId: string
+): Promise<{ filled: FilledFromMemory[]; stillMissing: { field_id: string; label: string }[] }> {
+  const [fields, memory] = await Promise.all([
+    getSessionFields(sessionId),
+    getAllMemory(userId) as Promise<{ field_key: string; value: string }[]>,
+  ]);
+  const byKey = new Map(memory.map((m) => [m.field_key, m.value]));
+
+  const matches = fields.filter(
+    (f) => f.status === "missing" && f.memoryKey && byKey.has(f.memoryKey)
+  );
+
+  // Concurrent so a dozen fields cost one round trip's latency, not twelve.
+  const results = await Promise.all(
+    matches.map(async (f) => {
+      const value = byKey.get(f.memoryKey as string) as string;
+      const updated = await updateFieldValue(sessionId, f.id, value, "filled", "memory");
+      return updated ? { field_id: f.id, label: f.label, value } : null;
+    })
+  );
+
+  const matchedIds = new Set(matches.map((m) => m.id));
+  return {
+    filled: results.filter((r): r is FilledFromMemory => r !== null),
+    stillMissing: fields
+      .filter((f) => f.status === "missing" && !matchedIds.has(f.id))
+      .map((f) => ({ field_id: f.id, label: f.label })),
+  };
+}
+
 /**
  * Clear one field, or every field in the session when `fieldKey` is omitted.
  *
@@ -483,8 +540,12 @@ export async function getChatMessages(
 
 // ─── Memory approvals (human-in-the-loop gate) ─────────────────────────────
 
+/** What a pending approval will do if the user allows it. */
+export type ApprovalKind = "memory_save" | "clear_all_fields";
+
 export interface MemoryApproval {
   id: string;
+  kind: ApprovalKind;
   sessionId: string;
   userId: string;
   fieldKey: string;
@@ -501,6 +562,7 @@ export interface MemoryApproval {
 function toApproval(r: Record<string, unknown>): MemoryApproval {
   return {
     id: r.id as string,
+    kind: (r.kind as ApprovalKind) ?? "memory_save",
     sessionId: r.session_id as string,
     userId: r.user_id as string,
     fieldKey: r.field_key as string,
@@ -520,14 +582,16 @@ export async function createMemoryApproval(
   fieldKey: string,
   label: string,
   value: string,
-  tfRefs?: { threadId: string; toolCallId: string }
+  tfRefs?: { threadId: string; toolCallId: string },
+  kind: ApprovalKind = "memory_save"
 ): Promise<MemoryApproval> {
   const sql = getSql();
-  const key = canonicalizeKey(fieldKey);
+  // Only a profile write has a memory key to canonicalise.
+  const key = kind === "memory_save" ? canonicalizeKey(fieldKey) : fieldKey;
   const result = await sql`
-    INSERT INTO memory_approvals (session_id, user_id, field_key, label, value, tf_thread_id, tf_tool_call_id)
+    INSERT INTO memory_approvals (session_id, user_id, field_key, label, value, tf_thread_id, tf_tool_call_id, kind)
     VALUES (${sessionId}, ${userId}, ${key}, ${label}, ${value},
-            ${tfRefs?.threadId ?? null}, ${tfRefs?.toolCallId ?? null})
+            ${tfRefs?.threadId ?? null}, ${tfRefs?.toolCallId ?? null}, ${kind})
     RETURNING *
   `;
   return toApproval(rows(result)[0]);
@@ -566,7 +630,10 @@ export async function resolveMemoryApproval(
   if (!row) return null;
 
   const approval = toApproval(row);
-  if (decision === "approved") {
+  // Only a profile write is performed here. Other approved actions (clearing
+  // the form) are carried out by the harness resuming the paused tool call —
+  // writing a memory row for one would store a junk key.
+  if (decision === "approved" && approval.kind === "memory_save") {
     await saveMemory(approval.userId, approval.fieldKey, approval.value);
   }
   return approval;

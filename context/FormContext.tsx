@@ -102,6 +102,7 @@ async function errorFrom(res: Response, fallback: string): Promise<string> {
 
 interface ApprovalRow {
   id: string;
+  kind?: PendingApproval["kind"];
   fieldKey: string;
   label: string;
   value: string;
@@ -111,6 +112,7 @@ function toPendingApprovals(rows: ApprovalRow[] | undefined): PendingApproval[] 
   if (!rows?.length) return [];
   return rows.map((a) => ({
     id: a.id,
+    kind: a.kind ?? "memory_save",
     fieldKey: a.fieldKey,
     label: a.label,
     value: a.value,
@@ -306,20 +308,25 @@ export function FormProvider({ children }: { children: React.ReactNode }) {
         });
         if (!res.ok) throw new Error(await errorFrom(res, "Could not record your decision"));
 
-        await refreshMessages();
+        // Resolving an approval resumes the agent's turn, so it can change
+        // anything a normal turn can: approving a clear empties every field,
+        // and the turn that follows a save often fills the next one. Re-read
+        // all three or the panels keep showing the state from before the
+        // decision — the form looked untouched after it had been cleared.
+        await Promise.all([refreshMessages(), refreshFields(), refreshApprovals()]);
       } catch (err) {
         setMessages((prev) => [
           ...prev,
           {
             id: makeId(),
             role: "assistant",
-            content: `Sorry — ${err instanceof Error ? err.message : String(err)}. Nothing was saved to your profile.`,
+            content: `Sorry — ${err instanceof Error ? err.message : String(err)}. Your decision may not have been recorded.`,
             timestamp: new Date().toISOString(),
           },
         ]);
       }
     },
-    [pendingApprovals, refreshMessages]
+    [pendingApprovals, refreshMessages, refreshFields, refreshApprovals]
   );
 
   const approveMemorySave = useCallback(() => resolveApproval("approve"), [resolveApproval]);

@@ -22,6 +22,7 @@ import {
   getSessionFields,
   updateFieldValue,
   clearFieldValues,
+  fillFieldsFromMemory,
   getMemory,
   saveMemory,
   getAllMemory,
@@ -51,6 +52,12 @@ const TOOL_DEFINITIONS = [
       "Returns the missing fields that can be filled immediately from the user's saved profile. Call this right after get_form_state, and fill every match before asking the user anything.",
     inputSchema: { type: "object", properties: {}, required: [] },
     annotations: { readOnlyHint: true },
+  },
+  {
+    name: "fill_from_memory",
+    description:
+      "Fills EVERY missing field that has a saved value, in one step, and returns what was filled and what still needs the user. Use this instead of calling fill_form_field once per known field — it is the fastest way to start a form.",
+    inputSchema: { type: "object", properties: {}, required: [] },
   },
   {
     name: "get_user_memory",
@@ -295,6 +302,25 @@ async function executeTool(
         field_key: saved.field_key,
         value: saved.value,
         message: `Saved '${saved.field_key}' to the user's profile for future forms.`,
+      };
+    }
+
+    case "fill_from_memory": {
+      // Deterministic work, done deterministically. Asking the model to issue
+      // one fill_form_field per match made a routine step depend on it
+      // remembering to make N sequential calls — which it stops doing reliably
+      // as a session's context grows, reporting success without having filled
+      // anything. Shared with the workspace button so both behave identically.
+      const { filled, stillMissing } = await fillFieldsFromMemory(ctx.sessionId, ctx.userId);
+      return {
+        success: true,
+        filledCount: filled.length,
+        filled,
+        stillMissing,
+        message:
+          filled.length === 0
+            ? "Nothing in the profile matched the missing fields."
+            : `Filled ${filled.length} ${filled.length === 1 ? "field" : "fields"} from the saved profile. ${stillMissing.length} still need the user.`,
       };
     }
 

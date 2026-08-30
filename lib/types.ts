@@ -72,6 +72,8 @@ export interface ChatMessage {
 // Created by the agent, resolved by the user via POST /api/approvals.
 export interface PendingApproval {
   id: string;
+  /** What allowing it will do — the card's copy and risk differ per action. */
+  kind: "memory_save" | "clear_all_fields";
   fieldKey: string;
   value: string;
   label: string;

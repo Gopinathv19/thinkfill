@@ -26,24 +26,42 @@ export async function persistTurnOutcome(
   }
 
   for (const approval of outcome.approvals) {
-    if (approval.toolName !== "save_user_memory") continue;
-    const fieldKey = approval.args.field_key ?? "";
-    await createMemoryApproval(
-      sessionId,
-      userId,
-      fieldKey,
-      labelForMemoryKey(fieldKey),
-      approval.args.value ?? "",
-      { threadId: approval.threadId, toolCallId: approval.toolCallId }
-    );
+    const refs = { threadId: approval.threadId, toolCallId: approval.toolCallId };
+
+    if (approval.toolName === "save_user_memory") {
+      const fieldKey = approval.args.field_key ?? "";
+      await createMemoryApproval(
+        sessionId,
+        userId,
+        fieldKey,
+        labelForMemoryKey(fieldKey),
+        approval.args.value ?? "",
+        refs,
+        "memory_save"
+      );
+    } else if (approval.toolName === "clear_all_form_fields") {
+      // Wiping the form is destructive and not undoable, so it goes through
+      // the same human gate as a profile write rather than happening the
+      // moment the agent decides to.
+      await createMemoryApproval(
+        sessionId,
+        userId,
+        "clear_all_fields",
+        "Clear the whole form",
+        "",
+        refs,
+        "clear_all_fields"
+      );
+    }
   }
 
   let text = outcome.assistantText ?? "";
   if (!text.trim() && outcome.approvals.length) {
     // The turn paused before the model could speak; say why the chat is
     // waiting so the approval card doesn't appear out of nowhere.
-    text =
-      "I'd like to save that to your profile for future forms — please approve or decline below.";
+    text = outcome.approvals.some((a) => a.toolName === "clear_all_form_fields")
+      ? "That will empty every field on this form and can't be undone — confirm below and I'll do it."
+      : "I'd like to save that to your profile for future forms — please approve or decline below.";
     await appendChatMessages(sessionId, [{ role: "assistant", content: text }]);
   }
   return text;
@@ -95,7 +113,10 @@ export async function declinePendingApprovals(
       await appendChatMessages(sessionId, [
         {
           role: "assistant",
-          content: `I didn't save **${row.label}** to your profile — ask me any time if you change your mind.`,
+          content:
+            row.kind === "clear_all_fields"
+              ? "I left the form as it was — nothing was cleared."
+              : `I didn't save **${row.label}** to your profile — ask me any time if you change your mind.`,
         },
       ]);
     }
