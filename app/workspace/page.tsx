@@ -28,6 +28,8 @@ function WorkspaceContent() {
   // the session is restored and the param is no longer the reason we're busy.
   const [isRestoring, setIsRestoring] = useState(false);
 
+  const [restoreFailed, setRestoreFailed] = useState(false);
+
   // Reopen a session linked from /chat or the sidebar.
   useEffect(() => {
     const param = searchParams.get("session");
@@ -37,12 +39,22 @@ function WorkspaceContent() {
     rehydrateSession(param).finally(() => setIsRestoring(false));
   }, [searchParams, sessionId, rehydrateSession]);
 
-  // The workspace always operates on a session; uploads happen in /chat.
+  // Once a restore attempt has finished with no session, there is nothing to
+  // show — the session was deleted, or the link is stale.
   useEffect(() => {
-    if (!searchParams.get("session") && !sessionId && !isLoading) {
+    if (isLoading || sessionId || !rehydratedRef.current) return;
+    setRestoreFailed(true);
+  }, [isLoading, sessionId]);
+
+  // The workspace always operates on a session; uploads happen in /chat. This
+  // covers arriving with no session at all, and a session that would not load
+  // — either would otherwise sit on a spinner with nothing left to wait for.
+  useEffect(() => {
+    if (isLoading || sessionId) return;
+    if (!searchParams.get("session") || restoreFailed) {
       router.replace("/chat");
     }
-  }, [searchParams, sessionId, isLoading, router]);
+  }, [searchParams, sessionId, isLoading, restoreFailed, router]);
 
   return (
     <div className="flex flex-col h-screen w-full overflow-hidden bg-white">

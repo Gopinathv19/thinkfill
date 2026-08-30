@@ -9,6 +9,7 @@
  * survives a page reload.
  */
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import type { FormField, FormSection, ChatMessage, PendingApproval } from "@/lib/types";
 
 // ─── Context shape ────────────────────────────────────────────────────────────
@@ -119,6 +120,7 @@ function toPendingApprovals(rows: ApprovalRow[] | undefined): PendingApproval[] 
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
 export function FormProvider({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [formName, setFormName] = useState<string>("");
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
@@ -325,6 +327,14 @@ export function FormProvider({ children }: { children: React.ReactNode }) {
 
   // ─── Reset ──────────────────────────────────────────────────────────────
 
+  /**
+   * Leave this form and start a new one.
+   *
+   * Uploads happen in the chat, so this navigates there rather than only
+   * clearing state: the workspace URL still carries `?session=…`, and a
+   * cleared session with a session id still in the address bar leaves the page
+   * with nothing to render and nothing to load.
+   */
   const resetSession = useCallback(() => {
     setSessionId(null);
     sessionIdRef.current = null;
@@ -332,7 +342,8 @@ export function FormProvider({ children }: { children: React.ReactNode }) {
     setPdfUrl(null);
     setTotalPages(1);
     clearSessionState();
-  }, [clearSessionState]);
+    router.push("/chat");
+  }, [clearSessionState, router]);
 
   return (
     <FormContext.Provider
