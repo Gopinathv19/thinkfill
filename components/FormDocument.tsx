@@ -246,7 +246,7 @@ function InlineFieldInput({
 
 // ─── Main component ──────────────────────────────────────────────────────────
 export default function FormDocument() {
-  const { pdfUrl, pdfFile, fields, activeFieldId, setActiveField, totalPages, sessionId, refreshFields } =
+  const { pdfUrl, fields, activeFieldId, setActiveField, totalPages, sessionId, refreshFields } =
     useFormContext();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -311,18 +311,15 @@ export default function FormDocument() {
     if (field && field.page !== currentPage) setCurrentPage(field.page);
   }, [activeFieldId, fields, currentPage]);
 
-  // ── Save a field value via MCP ───────────────────────────────────────────
+  // ── Save a field the user edited directly in the document ────────────────
   const saveField = useCallback(
     async (fieldId: string, value: string) => {
       if (!sessionId) return;
       try {
-        await fetch("/api/mcp", {
-          method: "POST",
+        await fetch("/api/session/fields", {
+          method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            tool: "fill_form_field",
-            params: { session_id: sessionId, field_id: fieldId, value, source: "user" },
-          }),
+          body: JSON.stringify({ sessionId, fieldId, value }),
         });
         await refreshFields();
       } catch (err) {
@@ -334,14 +331,17 @@ export default function FormDocument() {
 
   // ── Export PDF ────────────────────────────────────────────────────────────
   const exportPdf = useCallback(async () => {
-    if (!sessionId || !pdfFile || exporting) return;
+    if (!sessionId || !pdfUrl || exporting) return;
     setExporting(true);
 
     try {
       const { PDFDocument, rgb, StandardFonts } = await import("pdf-lib");
 
-      // Read bytes directly from the original File object — never revoked
-      const origBytes = await pdfFile.arrayBuffer();
+      // Fetch the original from the server rather than the uploading tab's
+      // File object, which is gone after navigating from /chat or reloading.
+      const res = await fetch(pdfUrl);
+      if (!res.ok) throw new Error("The original document could not be loaded");
+      const origBytes = await res.arrayBuffer();
       const pdfDoc = await PDFDocument.load(new Uint8Array(origBytes));
 
       // Verify the document loaded correctly
@@ -422,15 +422,22 @@ export default function FormDocument() {
     } finally {
       setExporting(false);
     }
-  }, [sessionId, pdfFile, fields, textStyle, exporting]);
+  }, [sessionId, pdfUrl, fields, textStyle, exporting]);
 
   // Fields on the current page with coordinates
   const pageFields = fields.filter((f) => f.page === currentPage && f.coordinates);
 
   if (!pdfUrl) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-gray-50 border-x border-gray-200">
-        <p className="text-gray-400 text-sm">No PDF loaded</p>
+      <div className="flex-1 flex items-center justify-center bg-gray-50 border-x border-gray-200 px-8">
+        <div className="text-center max-w-sm">
+          <p className="text-gray-500 text-sm font-medium">No document to preview</p>
+          <p className="text-gray-400 text-xs mt-1.5 leading-relaxed">
+            This session&apos;s fields are still editable here and in the chat — only the
+            page preview is unavailable. Sessions created before documents were stored
+            have no file to show.
+          </p>
+        </div>
       </div>
     );
   }

@@ -2,10 +2,10 @@
 
 import { FileText, Sparkles, Upload } from "lucide-react";
 import { usePathname } from "next/navigation";
+import { useOptionalFormContext } from "@/context/FormContext";
 
-function WorkspaceTopBar() {
-  const { useFormContext } = require("@/context/FormContext");
-  const { formName, completionPercent, sessionId, resetSession } = useFormContext();
+function WorkspaceTopBar({ ctx }: { ctx: NonNullable<ReturnType<typeof useOptionalFormContext>> }) {
+  const { formName, completionPercent, sessionId, resetSession } = ctx;
 
   return (
     <header className="h-14 flex items-center justify-between px-5 border-b border-violet-100 bg-white shrink-0 shadow-sm">
@@ -75,7 +75,13 @@ function StaticTopBar() {
 
 export default function TopBar() {
   const pathname = usePathname();
-  const isWorkspace = pathname?.startsWith("/workspace");
-  if (isWorkspace) return <WorkspaceTopBar />;
+  // The bar renders on pages with and without a form session, so the context is
+  // read optionally rather than through the throwing hook. Reading it here
+  // (not conditionally inside a branch) keeps the hook order stable.
+  const ctx = useOptionalFormContext();
+
+  if (pathname?.startsWith("/workspace") && ctx) {
+    return <WorkspaceTopBar ctx={ctx} />;
+  }
   return <StaticTopBar />;
 }

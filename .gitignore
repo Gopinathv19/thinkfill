@@ -42,3 +42,15 @@ next-env.d.ts
 
 .env.*
 
+docs/
+AGENTS.md 
+CLAUDE.md
+
+
+# uploaded PDFs when using the local (no-Vercel-Blob) store
+/.data/
+
+
+/scripts
+
+.tsbuildinfo

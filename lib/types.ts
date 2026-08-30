@@ -29,6 +29,13 @@ export interface FormField {
   options?: string[]; // For radio / dropdown fields
   required?: boolean;
   source?: "memory" | "user" | "ai" | "pdf-default";
+  /**
+   * Canonical key this field's value is stored under in user memory, so the
+   * same fact transfers between forms that name the field differently.
+   * Null for document-specific fields (signatures, dates, OTPs) that must
+   * never be remembered. See lib/memory-keys.ts.
+   */
+  memoryKey?: string | null;
 }
 
 // A grouped section of form fields (for the navigator)
@@ -61,8 +68,10 @@ export interface ChatMessage {
   toolResult?: unknown;
 }
 
-// Pending approval for saving to memory
+// A request from the agent to save a value to the user's profile.
+// Created by the agent, resolved by the user via POST /api/approvals.
 export interface PendingApproval {
+  id: string;
   fieldKey: string;
   value: string;
   label: string;

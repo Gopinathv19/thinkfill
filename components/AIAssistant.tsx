@@ -11,8 +11,11 @@ import {
   XCircle,
   Database,
   Loader2,
+  AlertTriangle,
+  ChevronRight,
 } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
+import { summarizeToolStep, type ToolStep } from "@/lib/tool-summary";
 
 // ─── Simple markdown-like renderer ───────────────────────────────────────────
 function renderContent(text: string) {
@@ -32,6 +35,65 @@ function renderContent(text: string) {
   });
 }
 
+// ─── One agent action ─────────────────────────────────────────────────────────
+//
+// A compact line rather than the tool's JSON: the payload for a 12-field form
+// runs to hundreds of lines and buries the conversation. The raw result is
+// still one click away, which is what makes the agent's work auditable.
+function ToolStepRow({ step, raw }: { step: ToolStep; raw: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  // Tools return compact JSON; indent it only for the expanded view.
+  let pretty = raw;
+  try {
+    pretty = JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    // Non-JSON output is shown as-is.
+  }
+
+  const icon =
+    step.kind === "fill" ? (
+      <CheckCircle size={11} className="text-emerald-600" />
+    ) : step.kind === "memory" ? (
+      <Database size={11} className="text-violet-600" />
+    ) : step.kind === "error" ? (
+      <AlertTriangle size={11} className="text-amber-600" />
+    ) : (
+      <Wrench size={11} className="text-blue-500" />
+    );
+
+  return (
+    <div className="px-3 py-1">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-start gap-2 text-left group"
+        title={expanded ? "Hide raw result" : "Show raw result"}
+      >
+        <div className="mt-0.5 w-5 h-5 rounded-md bg-gray-50 border border-gray-200 flex items-center justify-center shrink-0">
+          {icon}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-[11px] text-gray-600 leading-snug">
+            {step.label}
+            {step.detail && (
+              <span className="text-gray-400"> · {step.detail}</span>
+            )}
+          </p>
+        </div>
+        <ChevronRight
+          size={11}
+          className={`mt-1 shrink-0 text-gray-300 group-hover:text-gray-400 transition-transform ${expanded ? "rotate-90" : ""}`}
+        />
+      </button>
+      {expanded && (
+        <pre className="ml-7 mt-1 p-2 bg-gray-50 border border-gray-200 rounded-lg text-[10px] text-gray-500 overflow-x-auto whitespace-pre-wrap max-h-56 overflow-y-auto">
+          {pretty}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 // ─── Single message bubble ────────────────────────────────────────────────────
 function MessageBubble({ msg }: { msg: ChatMessage }) {
   const isUser      = msg.role === "user";
@@ -39,32 +101,16 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
   const isAssistant = msg.role === "assistant";
 
   if (isTool) {
-    const toolName    = msg.toolName ?? "tool";
-    const isMemoryTool = toolName.includes("memory");
-    const isFillTool   = toolName === "fill_form_field";
-
-    return (
-      <div className="flex items-start gap-2 px-3 py-2">
-        <div className="mt-0.5 w-5 h-5 rounded-md bg-violet-100 flex items-center justify-center shrink-0">
-          {isMemoryTool ? (
-            <Database size={11} className="text-violet-600" />
-          ) : isFillTool ? (
-            <CheckCircle size={11} className="text-emerald-600" />
-          ) : (
-            <Wrench size={11} className="text-blue-600" />
-          )}
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-[10px] font-semibold text-violet-600 mb-0.5">
-            ⚡ {toolName.replace(/_/g, " ")}
-          </p>
-          <div className="text-[10px] text-gray-500 leading-relaxed">
-            {renderContent(msg.content.replace(/^Tool: \*\*[^*]+\*\*\n/, ""))}
-          </div>
-        </div>
-      </div>
-    );
+    const step = summarizeToolStep(msg.toolName, msg.content);
+    // Tool-discovery plumbing summarises to nothing — it says how the agent
+    // found a tool, not anything about the form.
+    if (!step) return null;
+    return <ToolStepRow step={step} raw={msg.content} />;
   }
+
+  // A turn that only requested tools stores an assistant message with no text.
+  // It is real history the agent needs, but an empty bubble on screen.
+  if (isAssistant && !msg.content.trim()) return null;
 
   return (
     <div className={`flex gap-2.5 px-3 py-2 ${isUser ? "flex-row-reverse" : "flex-row"}`}>

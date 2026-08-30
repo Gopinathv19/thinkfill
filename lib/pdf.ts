@@ -5,6 +5,7 @@
  */
 import { PDFDocument, PDFField, PDFTextField, PDFRadioGroup, PDFCheckBox, PDFDropdown, PDFOptionList } from "pdf-lib";
 import type { FormField, FieldType } from "./types";
+import { resolveMemoryKey } from "./memory-keys";
 
 function toSlug(name: string): string {
   return name
@@ -163,6 +164,7 @@ export async function extractPdfFields(
       options,
       required: false,
       source: value ? "pdf-default" : undefined,
+      memoryKey: resolveMemoryKey(label, rawName)?.key ?? null,
     };
   });
 

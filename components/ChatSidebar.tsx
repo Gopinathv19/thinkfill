@@ -8,7 +8,6 @@ import {
   Clock,
   Plus,
   Trash2,
-  MoreHorizontal,
   Loader2,
   FileText,
 } from "lucide-react";
@@ -47,6 +46,8 @@ export default function ChatSidebar({ activeId, onSelect }: ChatSidebarProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -74,6 +75,42 @@ export default function ChatSidebar({ activeId, onSelect }: ChatSidebarProps) {
   const handleSessionClick = (id: string) => {
     onSelect?.(id);
     router.push(`/workspace?session=${id}`);
+  };
+
+  /**
+   * Delete a session, its stored PDF and its agent session.
+   *
+   * Two clicks rather than a `confirm()` dialog: the first arms the row, the
+   * second commits. This is irreversible and the list is dense, so an
+   * accidental click must not destroy someone's form.
+   */
+  const handleDelete = async (id: string) => {
+    if (confirmingId !== id) {
+      setConfirmingId(id);
+      return;
+    }
+
+    setConfirmingId(null);
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`Delete failed (${res.status})`);
+
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+
+      // Leave the workspace if it is showing the session that just went away.
+      // Read the URL here rather than with useSearchParams: that hook opts the
+      // whole sidebar — and so every page rendering it — out of static
+      // prerendering, and this only needs to be known at click time.
+      const current = new URLSearchParams(window.location.search).get("session");
+      if (window.location.pathname.startsWith("/workspace") && current === id) {
+        router.push("/chat");
+      }
+    } catch (err) {
+      console.error("[ChatSidebar] delete failed", err);
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   return (
@@ -210,20 +247,44 @@ export default function ChatSidebar({ activeId, onSelect }: ChatSidebarProps) {
                 </div>
 
                 {/* Hover actions */}
-                {hoveredId === item.id && (
+                {(hoveredId === item.id || confirmingId === item.id || deletingId === item.id) && (
                   <div className="flex items-center gap-1 absolute right-2 top-2.5">
-                    <button
-                      className="p-1 rounded-lg hover:bg-[#e8e0f5] text-[#9d8ec7] hover:text-[#6c47d9] transition-colors"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <MoreHorizontal size={13} />
-                    </button>
-                    <button
-                      className="p-1 rounded-lg hover:bg-[#ffe4e8] text-[#9d8ec7] hover:text-[#e05c8a] transition-colors"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                    {deletingId === item.id ? (
+                      <Loader2 size={13} className="text-[#9d8ec7] animate-spin" />
+                    ) : confirmingId === item.id ? (
+                      <>
+                        <button
+                          className="px-2 py-0.5 rounded-lg bg-[#e05c8a] text-white text-[10px] font-semibold hover:opacity-90 transition-opacity"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(item.id);
+                          }}
+                          title="Permanently delete this session and its PDF"
+                        >
+                          Delete
+                        </button>
+                        <button
+                          className="px-2 py-0.5 rounded-lg bg-white border border-[#d8d0ee] text-[#9d8ec7] text-[10px] font-medium hover:text-[#6c47d9] transition-colors"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmingId(null);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="p-1 rounded-lg hover:bg-[#ffe4e8] text-[#9d8ec7] hover:text-[#e05c8a] transition-colors"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(item.id);
+                        }}
+                        title="Delete session"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

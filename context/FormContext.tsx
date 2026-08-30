@@ -2,6 +2,11 @@
 /**
  * context/FormContext.tsx
  * Shared state for the form workspace — all three panels read/write from here.
+ *
+ * Conversation history is owned by the server (see /api/session/messages), not
+ * held in this component. After every agent turn the thread is re-read from the
+ * database, so tool calls and their results are never dropped and a session
+ * survives a page reload.
  */
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import type { FormField, FormSection, ChatMessage, PendingApproval } from "@/lib/types";
@@ -12,7 +17,7 @@ interface FormContextValue {
   // Session
   sessionId: string | null;
   formName: string;
-  pdfFile: File | null;
+  /** Server URL of the uploaded document, or null when none is stored. */
   pdfUrl: string | null;
   totalPages: number;
   isLoading: boolean;
@@ -28,16 +33,15 @@ interface FormContextValue {
   messages: ChatMessage[];
   isChatLoading: boolean;
 
-  // Approval
+  // Approval — the head of the queue; resolving it reveals the next.
   pendingApproval: PendingApproval | null;
 
   // Actions
-  uploadPdf: (file: File) => Promise<void>;
   rehydrateSession: (sessionId: string) => Promise<void>;
   setActiveField: (fieldId: string | null) => void;
   sendMessage: (content: string) => Promise<void>;
   approveMemorySave: () => Promise<void>;
-  rejectMemorySave: () => void;
+  rejectMemorySave: () => Promise<void>;
   refreshFields: () => Promise<void>;
   resetSession: () => void;
 }
@@ -48,6 +52,15 @@ export function useFormContext() {
   const ctx = useContext(FormContext);
   if (!ctx) throw new Error("useFormContext must be used inside FormProvider");
   return ctx;
+}
+
+/**
+ * Same context, but returns null outside a provider instead of throwing.
+ * For components such as the top bar that render on pages with and without a
+ * form session.
+ */
+export function useOptionalFormContext() {
+  return useContext(FormContext);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -76,12 +89,38 @@ function makeId(): string {
   return Math.random().toString(36).slice(2);
 }
 
+/** Pull a human-readable message out of an error response body. */
+async function errorFrom(res: Response, fallback: string): Promise<string> {
+  try {
+    const data = await res.json();
+    return data.error ?? data.details ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+interface ApprovalRow {
+  id: string;
+  fieldKey: string;
+  label: string;
+  value: string;
+}
+
+function toPendingApprovals(rows: ApprovalRow[] | undefined): PendingApproval[] {
+  if (!rows?.length) return [];
+  return rows.map((a) => ({
+    id: a.id,
+    fieldKey: a.fieldKey,
+    label: a.label,
+    value: a.value,
+  }));
+}
+
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
 export function FormProvider({ children }: { children: React.ReactNode }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [formName, setFormName] = useState<string>("");
-  const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [totalPages, setTotalPages] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
@@ -95,129 +134,105 @@ export function FormProvider({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isChatLoading, setIsChatLoading] = useState(false);
 
-  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
 
-  // Ref so we don't need sessionId in every callback's dependency array
+  // Ref so callbacks don't need sessionId in their dependency arrays, which
+  // would rebuild them (and risk stale closures) on every session change.
   const sessionIdRef = useRef<string | null>(null);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
-  // Revoke old object URL on change
-  useEffect(() => {
-    return () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl); };
-  }, [pdfUrl]);
+  const applyFields = useCallback((flds: FormField[]) => {
+    setFields(flds);
+    setSections(buildSections(flds));
+    setCompletionPercent(calcCompletion(flds));
+  }, []);
 
-  // ─── Upload PDF ─────────────────────────────────────────────────────────
-
-  const uploadPdf = useCallback(async (file: File) => {
-    setIsLoading(true);
-    setUploadError(null);
+  const clearSessionState = useCallback(() => {
     setMessages([]);
     setFields([]);
     setSections([]);
     setActiveFieldId(null);
     setCompletionPercent(0);
-
-    // Create a local object URL so react-pdf can render it
-    const url = URL.createObjectURL(file);
-    setPdfFile(file);
-    setPdfUrl(url);
-
-    try {
-      const fd = new FormData();
-      fd.append("pdf", file);
-
-      const res = await fetch("/api/pdf/extract", { method: "POST", body: fd });
-      const data = await res.json();
-
-      if (!res.ok) throw new Error(data.error ?? "Failed to extract PDF");
-
-      setSessionId(data.sessionId);
-      setFormName(data.formName);
-      setTotalPages(data.totalPages);
-
-      const flds: FormField[] = data.fields;
-      setFields(flds);
-      setSections(buildSections(flds));
-      setCompletionPercent(calcCompletion(flds));
-
-      // Welcome message from assistant
-      setMessages([
-        {
-          id: makeId(),
-          role: "assistant",
-          content: `I've loaded **${data.formName}** and found **${flds.length} fields** (${flds.filter(f => f.status === "missing").length} need to be filled). Let me help you fill them out. Type **"start"** to begin, or click any field in the navigator.`,
-          timestamp: new Date().toISOString(),
-        },
-      ]);
-    } catch (err) {
-      setUploadError(String(err));
-      setPdfUrl(null);
-      setPdfFile(null);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  // ─── Rehydrate an existing session (e.g. navigated from /chat or sidebar) ──
-
-  const rehydrateSession = useCallback(async (sid: string) => {
-    setIsLoading(true);
+    setPendingApprovals([]);
     setUploadError(null);
-    setMessages([]);
-    setFields([]);
-    setSections([]);
-    setActiveFieldId(null);
-    setCompletionPercent(0);
-    setPdfFile(null);
-    setPdfUrl(null);
-
-    try {
-      // 1. Fetch session metadata
-      const sessionRes = await fetch(`/api/session/fields?sessionId=${sid}`);
-      const sessionData = await sessionRes.json();
-      if (!sessionRes.ok) throw new Error(sessionData.error ?? "Session not found");
-
-      setSessionId(sid);
-      if (sessionData.formName) setFormName(sessionData.formName);
-      if (sessionData.totalPages) setTotalPages(sessionData.totalPages);
-
-      const flds: FormField[] = sessionData.fields ?? [];
-      setFields(flds);
-      setSections(buildSections(flds));
-      setCompletionPercent(calcCompletion(flds));
-
-      setMessages([
-        {
-          id: makeId(),
-          role: "assistant",
-          content: `Welcome back! I've restored your session for **${sessionData.formName ?? "your form"}** with **${flds.length} fields** (${flds.filter((f) => f.status === "missing").length} still need filling). Type **"continue"** to pick up where you left off.`,
-          timestamp: new Date().toISOString(),
-        },
-      ]);
-    } catch (err) {
-      setUploadError(String(err));
-    } finally {
-      setIsLoading(false);
-    }
   }, []);
 
-  // ─── Refresh fields from server ─────────────────────────────────────────
+  // ─── Server reads ───────────────────────────────────────────────────────
 
   const refreshFields = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid) return;
     try {
-      const res = await fetch(`/api/session/fields?sessionId=${sid}`);
+      const res = await fetch(`/api/session/fields?sessionId=${encodeURIComponent(sid)}`);
+      if (!res.ok) return;
       const data = await res.json();
-      if (data.fields) {
-        setFields(data.fields);
-        setSections(buildSections(data.fields));
-        setCompletionPercent(calcCompletion(data.fields));
-      }
+      if (data.fields) applyFields(data.fields);
     } catch {
-      // silent — best effort
+      // Best effort — the panel keeps showing the last known state.
+    }
+  }, [applyFields]);
+
+  const refreshMessages = useCallback(async () => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    try {
+      const res = await fetch(`/api/session/messages?sessionId=${encodeURIComponent(sid)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.messages)) setMessages(data.messages);
+    } catch {
+      // Best effort.
     }
   }, []);
+
+  const refreshApprovals = useCallback(async () => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    try {
+      const res = await fetch(`/api/approvals?sessionId=${encodeURIComponent(sid)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setPendingApprovals(toPendingApprovals(data.approvals));
+    } catch {
+      // Best effort.
+    }
+  }, []);
+
+  // ─── Rehydrate a session (opened from /chat or the sidebar) ─────────────
+
+  /**
+   * Loads everything the workspace shows for a session.
+   *
+   * The document is addressed by session id rather than carried over from the
+   * page that uploaded it, so it survives navigation from /chat and a reload —
+   * which is the whole reason the bytes are stored server-side.
+   */
+  const rehydrateSession = useCallback(async (sid: string) => {
+    setIsLoading(true);
+    clearSessionState();
+    setPdfUrl(null);
+
+    try {
+      const res = await fetch(`/api/session/fields?sessionId=${encodeURIComponent(sid)}`);
+      if (!res.ok) throw new Error(await errorFrom(res, "Session not found"));
+      const data = await res.json();
+
+      setSessionId(sid);
+      sessionIdRef.current = sid;
+      if (data.formName) setFormName(data.formName);
+      if (data.totalPages) setTotalPages(data.totalPages);
+      applyFields(data.fields ?? []);
+      setPdfUrl(
+        data.hasDocument ? `/api/session/pdf?sessionId=${encodeURIComponent(sid)}` : null
+      );
+
+      await Promise.all([refreshMessages(), refreshApprovals()]);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [applyFields, clearSessionState, refreshMessages, refreshApprovals]);
 
   // ─── Send chat message to agent ─────────────────────────────────────────
 
@@ -226,86 +241,41 @@ export function FormProvider({ children }: { children: React.ReactNode }) {
       const sid = sessionIdRef.current;
       if (!sid) return;
 
-      const userMsg: ChatMessage = {
+      // Show the user's message straight away; the authoritative thread is
+      // re-read from the server once the agent has finished.
+      const optimistic: ChatMessage = {
         id: makeId(),
         role: "user",
         content,
         timestamp: new Date().toISOString(),
       };
-
-      setMessages((prev) => [...prev, userMsg]);
+      setMessages((prev) => [...prev, optimistic]);
       setIsChatLoading(true);
 
       try {
-        // Build message history for the API (last 20 messages to stay within context)
-        const history = [...messages.slice(-20), userMsg].map((m) => ({
-          role: m.role === "tool" ? "user" : m.role,
-          content: m.content,
-        }));
-
         const res = await fetch("/api/agent/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: history, sessionId: sid }),
+          body: JSON.stringify({ message: content, sessionId: sid }),
         });
 
+        if (!res.ok) {
+          throw new Error(await errorFrom(res, `Request failed (${res.status})`));
+        }
+
         const data = await res.json();
+        setPendingApprovals(toPendingApprovals(data.pendingApprovals));
 
-        // Add tool call messages for visibility
-        if (data.toolCalls?.length) {
-          for (const tc of data.toolCalls) {
-            const toolMsg: ChatMessage = {
-              id: makeId(),
-              role: "tool",
-              content: `Tool: **${tc.tool}**\n\`\`\`json\n${JSON.stringify(tc.result, null, 2)}\n\`\`\``,
-              timestamp: new Date().toISOString(),
-              toolName: tc.tool,
-              toolResult: tc.result,
-            };
-            setMessages((prev) => [...prev, toolMsg]);
-          }
-        }
-
-        // Assistant reply
-        if (data.message) {
-          const assistantMsg: ChatMessage = {
-            id: makeId(),
-            role: "assistant",
-            content: data.message,
-            timestamp: new Date().toISOString(),
-          };
-          setMessages((prev) => [...prev, assistantMsg]);
-
-          // Check if agent is asking to save memory
-          const lc = data.message.toLowerCase();
-          if (
-            (lc.includes("save") || lc.includes("remember")) &&
-            (lc.includes("memory") || lc.includes("profile") || lc.includes("future"))
-          ) {
-            // Extract what might be saved from the last tool call
-            const fillCalls = data.toolCalls?.filter(
-              (tc: { tool: string; args: { field_id?: string; value?: string } }) => tc.tool === "fill_form_field"
-            );
-            if (fillCalls?.length) {
-              const last = fillCalls[fillCalls.length - 1];
-              setPendingApproval({
-                fieldKey: last.args.field_id,
-                value: last.args.value,
-                label: last.args.field_id?.replace(/-/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()),
-              });
-            }
-          }
-        }
-
-        // Refresh field states after agent actions
-        await refreshFields();
+        // Replace the optimistic thread with the persisted one, which also
+        // carries the agent's tool calls.
+        await Promise.all([refreshMessages(), refreshFields()]);
       } catch (err) {
         setMessages((prev) => [
           ...prev,
           {
             id: makeId(),
             role: "assistant",
-            content: `Sorry, I encountered an error: ${String(err)}`,
+            content: `Sorry — ${err instanceof Error ? err.message : String(err)}`,
             timestamp: new Date().toISOString(),
           },
         ]);
@@ -313,76 +283,62 @@ export function FormProvider({ children }: { children: React.ReactNode }) {
         setIsChatLoading(false);
       }
     },
-    [messages, refreshFields]
+    [refreshMessages, refreshFields]
   );
 
   // ─── Memory approval ────────────────────────────────────────────────────
 
-  const approveMemorySave = useCallback(async () => {
-    if (!pendingApproval) return;
-    try {
-      await fetch("/api/mcp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tool: "save_user_memory",
-          params: { field_key: pendingApproval.fieldKey, value: pendingApproval.value },
-        }),
-      });
+  const resolveApproval = useCallback(
+    async (decision: "approve" | "reject") => {
+      const approval = pendingApprovals[0];
+      if (!approval) return;
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: makeId(),
-          role: "assistant",
-          content: `✅ I've saved your **${pendingApproval.label}** to your profile. It will be used to fill future forms automatically.`,
-          timestamp: new Date().toISOString(),
-        },
-      ]);
-    } catch {
-      // silent
-    } finally {
-      setPendingApproval(null);
-    }
-  }, [pendingApproval]);
+      // Drop it from the queue immediately so the card can't be submitted twice.
+      setPendingApprovals((prev) => prev.slice(1));
 
-  const rejectMemorySave = useCallback(() => {
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: makeId(),
-        role: "assistant",
-        content: `Understood — I won't save that to your profile. You can always update your preferences later.`,
-        timestamp: new Date().toISOString(),
-      },
-    ]);
-    setPendingApproval(null);
-  }, []);
+      try {
+        const res = await fetch("/api/approvals", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approvalId: approval.id, decision }),
+        });
+        if (!res.ok) throw new Error(await errorFrom(res, "Could not record your decision"));
+
+        await refreshMessages();
+      } catch (err) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: makeId(),
+            role: "assistant",
+            content: `Sorry — ${err instanceof Error ? err.message : String(err)}. Nothing was saved to your profile.`,
+            timestamp: new Date().toISOString(),
+          },
+        ]);
+      }
+    },
+    [pendingApprovals, refreshMessages]
+  );
+
+  const approveMemorySave = useCallback(() => resolveApproval("approve"), [resolveApproval]);
+  const rejectMemorySave = useCallback(() => resolveApproval("reject"), [resolveApproval]);
 
   // ─── Reset ──────────────────────────────────────────────────────────────
 
   const resetSession = useCallback(() => {
-    if (pdfUrl) URL.revokeObjectURL(pdfUrl);
     setSessionId(null);
+    sessionIdRef.current = null;
     setFormName("");
-    setPdfFile(null);
     setPdfUrl(null);
     setTotalPages(1);
-    setFields([]);
-    setSections([]);
-    setActiveFieldId(null);
-    setCompletionPercent(0);
-    setMessages([]);
-    setPendingApproval(null);
-    setUploadError(null);
-  }, [pdfUrl]);
+    clearSessionState();
+  }, [clearSessionState]);
 
   return (
     <FormContext.Provider
       value={{
         sessionId,
         formName,
-        pdfFile,
         pdfUrl,
         totalPages,
         isLoading,
@@ -393,8 +349,7 @@ export function FormProvider({ children }: { children: React.ReactNode }) {
         completionPercent,
         messages,
         isChatLoading,
-        pendingApproval,
-        uploadPdf,
+        pendingApproval: pendingApprovals[0] ?? null,
         rehydrateSession,
         setActiveField: setActiveFieldId,
         sendMessage,
