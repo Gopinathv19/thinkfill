@@ -335,7 +335,8 @@ export default function FormDocument() {
     setExporting(true);
 
     try {
-      const { PDFDocument, rgb, StandardFonts } = await import("pdf-lib");
+      const { PDFDocument, rgb, StandardFonts, PDFTextField, PDFCheckBox, PDFDropdown } =
+        await import("pdf-lib");
 
       // Fetch the original from the server rather than the uploading tab's
       // File object, which is gone after navigating from /chat or reloading.
@@ -352,60 +353,106 @@ export default function FormDocument() {
       const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
       const pdfPages = pdfDoc.getPages();
 
-      // Strategy 1 — fill AcroForm fields by their exact field name
-      let usedAcroForm = false;
-      try {
-        const form = pdfDoc.getForm();
-        const formFields = form.getFields();
-        if (formFields.length > 0) {
-          for (const appField of fields) {
-            if (!appField.value) continue;
-            // Try both label and id as the AcroForm field name
-            for (const key of [appField.label, appField.id]) {
-              try {
-                const f = form.getTextField(key);
-                f.setText(appField.value);
-                usedAcroForm = true;
-                break;
-              } catch { /* not found under this key */ }
-            }
-          }
-          if (usedAcroForm) form.flatten();
+      // ── Fill the form ────────────────────────────────────────────────────
+      //
+      // A PDF's internal field names rarely match the app's ids. This form
+      // names a field `full_name`, while extraction produced the id
+      // `full-name` and the label "full name" — all the same field, three
+      // spellings. Matching on a key with every separator stripped makes them
+      // equal. Without it only single-word names like `occupation` matched,
+      // and an export came out almost entirely blank.
+      const normalizeName = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const isTruthy = (v: string) =>
+        ["true", "yes", "1", "on", "checked", "x"].includes(v.trim().toLowerCase());
+
+      const formFields = (() => {
+        try {
+          return pdfDoc.getForm().getFields();
+        } catch {
+          return []; // Flat PDF with no AcroForm — everything is drawn below.
         }
-      } catch { /* no AcroForm */ }
+      })();
+      const acroByName = new Map(formFields.map((f) => [normalizeName(f.getName()), f] as const));
 
-      // Strategy 2 — draw text directly at field coordinates
-      if (!usedAcroForm) {
-        const hex = textStyle.color.replace("#", "");
-        const rC = parseInt(hex.slice(0, 2), 16) / 255;
-        const gC = parseInt(hex.slice(2, 4), 16) / 255;
-        const bC = parseInt(hex.slice(4, 6), 16) / 255;
+      // Tracked per field, not as one flag: a single successful match used to
+      // switch the coordinate fallback off for every remaining field.
+      const filledViaAcroForm = new Set<string>();
 
-        for (const field of fields) {
-          if (!field.value || !field.coordinates) continue;
-          const pageIdx = field.page - 1;
-          if (pageIdx >= pdfPages.length) continue;
-          const page = pdfPages[pageIdx];
-          const { width, height } = page.getSize();
+      for (const appField of fields) {
+        if (!appField.value) continue;
 
-          // PDF coordinate system: origin bottom-left
-          const x = field.coordinates.x * width + 2;
-          const fieldBottom = (field.coordinates.y + field.coordinates.height) * height;
-          // Place text a bit above the bottom of the field box
-          const y = height - fieldBottom + 4;
+        const target =
+          acroByName.get(normalizeName(appField.id)) ??
+          acroByName.get(normalizeName(appField.label)) ??
+          (appField.memoryKey ? acroByName.get(normalizeName(appField.memoryKey)) : undefined);
+        if (!target) continue;
 
-          page.drawText(field.value, {
-            x,
-            y: Math.max(2, y),
-            size: textStyle.fontSize,
-            font: helvetica,
-            color: rgb(rC, gC, bC),
-          });
+        try {
+          if (target instanceof PDFTextField) {
+            target.setText(appField.value);
+            // Fields often carry an oversized default appearance; match the
+            // toolbar's size so the export looks like the preview.
+            target.setFontSize(textStyle.fontSize);
+          } else if (target instanceof PDFCheckBox) {
+            // Checkboxes hold "true"/"yes", not text — setText would throw.
+            if (isTruthy(appField.value)) target.check();
+            else target.uncheck();
+          } else if (target instanceof PDFDropdown) {
+            target.select(appField.value);
+          } else {
+            continue; // Unsupported widget: fall through to drawing.
+          }
+          filledViaAcroForm.add(appField.id);
+        } catch {
+          // Value the widget wouldn't accept (e.g. an option not in the list).
+          // Leave it for the coordinate pass.
+        }
+      }
+
+      // Draw whatever the form itself could not take, at its coordinates.
+      const hex = textStyle.color.replace("#", "");
+      const rC = parseInt(hex.slice(0, 2), 16) / 255;
+      const gC = parseInt(hex.slice(2, 4), 16) / 255;
+      const bC = parseInt(hex.slice(4, 6), 16) / 255;
+
+      for (const field of fields) {
+        if (!field.value || filledViaAcroForm.has(field.id) || !field.coordinates) continue;
+        const pageIdx = field.page - 1;
+        if (pageIdx >= pdfPages.length) continue;
+        const page = pdfPages[pageIdx];
+        const { width, height } = page.getSize();
+
+        // PDF coordinate system: origin bottom-left
+        const x = field.coordinates.x * width + 2;
+        const fieldBottom = (field.coordinates.y + field.coordinates.height) * height;
+        // Place text a bit above the bottom of the field box
+        const y = height - fieldBottom + 4;
+
+        page.drawText(field.value, {
+          x,
+          y: Math.max(2, y),
+          size: textStyle.fontSize,
+          font: helvetica,
+          color: rgb(rC, gC, bC),
+        });
+      }
+
+      // Flatten last, so the values are baked in rather than living in form
+      // widgets that some viewers render only when they feel like it.
+      if (filledViaAcroForm.size > 0) {
+        try {
+          pdfDoc.getForm().flatten();
+        } catch {
+          // Leave it interactive rather than failing the export.
         }
       }
 
       // Save and trigger download
-      const savedBytes = await pdfDoc.save();
+      // Plain cross-reference tables rather than object streams: pdf-lib's
+      // object-stream output is re-readable by pdf-lib but rejected by stricter
+      // parsers (poppler/pdftotext, some viewers), which would hand the user a
+      // file that opens in one place and not another.
+      const savedBytes = await pdfDoc.save({ useObjectStreams: false });
       // Use a copy of the underlying buffer to avoid SharedArrayBuffer issues
       const blob = new Blob([new Uint8Array(savedBytes)], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
