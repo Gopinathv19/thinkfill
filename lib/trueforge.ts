@@ -47,7 +47,7 @@ export function getTrueForgeClient(): TrueForge {
  * A whole-turn deadline is the wrong tool: a legitimate turn that fills a
  * dozen fields runs for minutes, while a wedged provider produces silence in
  * seconds. So the watchdog measures the gap *between* events and resets on
- * every one. Sized well above a slow first token (a healthy model answers in
+ * every one. ealthy moSized well above a slow first token (a hdel answers in
  * under a second) and well below TrueForge's own 300s provider timeout, which
  * is what left the UI hanging for five minutes.
  */
@@ -150,6 +150,8 @@ Rules:
  * Create the harness session behind the /chat lobby. No MCP servers, tight
  * iteration limit — it is a pure conversation.
  */
+
+
 export async function createLobbySession(): Promise<string> {
   const client = getTrueForgeClient();
   const model = await resolveModelName();
